@@ -1255,7 +1255,7 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_geocode(qs)
         elif path.startswith("/static/"):
             self.serve_static(path, versioned=versioned)
-        elif path in ("/style.css", "/app.js", "/nebosvod.ico", "/logo.png"):
+        elif path in ("/style.css", "/app.js", "/nebosvod.ico", "/logo.png", "/help.html"):
             self.serve_static(path, versioned=versioned)
         else:
             self.send_json(404, {"error": "Not found", "reason": "not_found"})

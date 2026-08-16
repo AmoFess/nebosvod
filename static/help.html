@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Помощь — Небосвод</title>
+  <link rel="icon" type="image/x-icon" href="nebosvod.ico">
+  <link rel="stylesheet" href="style.css?v=17">
+</head>
+<body>
+  <header class="header">
+    <div class="brand">
+      <img src="logo.png" class="logo" alt="Небосвод">
+      <h1 class="title">Небосвод</h1>
+    </div>
+    <a class="help-back" href="/">← На главную</a>
+  </header>
+
+  <main class="help-main">
+    <h2 class="help-h2">Как пользоваться Небосводом</h2>
+
+    <p class="help-intro">
+      Небосвод — это погодный сервис, который отдаёт данные в формате JSON.
+      Формат этот читают и люди, и программы: скрипты, автоматизации,
+      умный дом. Ниже — простой разбор, без технического жаргона.
+    </p>
+
+    <section class="help-section">
+      <h3>Как получить погоду</h3>
+      <p>
+        Откройте адрес погоды — и получите ответ. Например, погода
+        в Екатеринбурге:
+      </p>
+      <pre class="help-code">{{BASE}}/api/weather?city=ekb</pre>
+      <p>
+        В ответе будет три блока: <b>current</b> — погода сейчас
+        (температура, влажность, ветер, облачность, осадки),
+        <b>daily</b> — на день (максимум/минимум, рассвет, закат,
+        вероятность осадков), <b>nightly</b> — на ночь. Рядом лежат
+        единицы измерения — что чем меряется.
+      </p>
+      <p>
+        Город можно указать коротким именем (<b>alias</b>) — например
+        <code>ekb</code>, <code>tyumen</code>, <code>is</code> — или
+        числовым <code>city_id</code>.
+      </p>
+      <p>
+        <b>Готовая ссылка на город.</b> Откройте карточку города (кликните
+        по ней), и там будет строка «ID города» — сам ID является ссылкой.
+        Кликните по нему, и полная ссылка API на этот город скопируется
+        в буфер обмена. Останется только вставить её в браузер, скрипт
+        или умный дом.
+      </p>
+    </section>
+
+    <section class="help-section">
+      <h3>Список городов</h3>
+      <p>Все города, которые умеет сервис, отдаёт этот адрес:</p>
+      <pre class="help-code">{{BASE}}/api/all-cities</pre>
+      <p>
+        В списке у каждого города: имя, короткое имя (alias), широта,
+        долгота и часовой пояс.
+      </p>
+    </section>
+
+    <section class="help-section">
+      <h3>Умный дом и автоматизации</h3>
+      <p>
+        Сервис не требует пароля для чтения погоды — можно просто
+        запрашивать адрес из любой системы. Вот как это делается
+        в самых популярных местах.
+      </p>
+
+      <h4>Home Assistant</h4>
+      <p>
+        Добавьте в <code>configuration.yaml</code> «датчик по REST» —
+        Home Assistant сам будет опрашивать сервис и покажет температуру
+        как обычный сенсор:
+      </p>
+      <pre class="help-code">sensor:
+  - platform: rest
+    name: "Небосвод Екатеринбург"
+    resource: "{{BASE}}/api/weather?city=ekb"
+    value_template: "{{ value_json.current.temperature }}"
+    unit_of_measurement: "°C"
+    scan_interval: 900</pre>
+      <p>
+        Так же можно вытащить влажность
+        (<code>value_json.current.humidity</code>), ветер
+        (<code>value_json.current.wind_speed</code>) или давление
+        (<code>value_json.current.pressure_mmhg</code>).
+      </p>
+
+      <h4>Node-RED</h4>
+      <p>
+        Узел <b>HTTP Request</b> на адрес погоды — и дальше парсите
+        ответ как обычный JSON. Температура будет в
+        <code>msg.payload.current.temperature</code>.
+      </p>
+
+      <h4>Любой скрипт</h4>
+      <p>Например, на bash:</p>
+      <pre class="help-code">curl -s "{{BASE}}/api/weather?city=ekb" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); \
+print(d['current']['temperature'], '°C')"</pre>
+      <p>Или на Python:</p>
+      <pre class="help-code">import json, urllib.request
+with urllib.request.urlopen(
+        "{{BASE}}/api/weather?city=ekb") as r:
+    d = json.load(r)
+print(d["current"]["temperature"], "°C")</pre>
+    </section>
+
+    <section class="help-section">
+      <h3>Важные мелочи</h3>
+      <ul class="help-list">
+        <li>Адрес сервиса подставляется в примеры автоматически — он совпадает с адресом этой страницы. Если сервис переедет на доменное имя, примеры обновятся сами.</li>
+        <li>Данные кэшируются — сервис не дёргает внешний источник каждую секунду. Обновление происходит примерно раз в 20 минут.</li>
+        <li>Если очень нужно свежее — добавьте <code>&amp;refresh=1</code> в конец адреса.</li>
+        <li>Код погоды — международный код WMO. Что он значит, легко найти по запросу «коды погоды WMO».</li>
+        <li>Сервис домашний и бесплатный. Если он лежит — скорее всего, просто отключили электричество или сеть.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="status"><span class="status-info">Небосвод — открытый погодный сервис</span></div>
+  </footer>
+
+  <script>
+    // Подставляем текущий адрес сервиса вместо {{BASE}}.
+    // Так примеры остаются верными и при переезде на доменное имя.
+    (function () {
+      var base = window.location.origin; // напр. http://192.168.0.35:8080 или https://небосвод.рф
+      document.querySelectorAll(".help-code").forEach(function (el) {
+        el.textContent = el.textContent.split("{{BASE}}").join(base);
+      });
+    })();
+  </script>
+</body>
+</html>

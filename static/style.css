@@ -226,6 +226,78 @@ body {
   margin-bottom: 18px;
 }
 
+/* Поддержка проекта: два столбика — текст слева, кнопка справа. */
+.donate-cols {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  align-items: center;
+}
+
+.donate-text {
+  color: #D6C5A8;
+  font-size: 16px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 560px;
+}
+
+.donate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 22px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 17px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+
+.donate-btn:hover,
+.donate-btn:focus {
+  background: #F0B255;
+  outline: none;
+}
+
+/* Группа кнопок справа в блоке поддержки: Помощь + донат. */
+.donate-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  justify-self: end;
+  align-self: center;
+}
+
+.help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 22px;
+  border-radius: 12px;
+  background: transparent;
+  border: 1px solid var(--border-dim);
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.help-btn:hover,
+.help-btn:focus {
+  background: var(--card-hover);
+  border-color: var(--accent);
+  outline: none;
+}
+
 .sett-section h3 {
   color: var(--heading);
   font-size: 18px;
@@ -288,7 +360,7 @@ body {
 
 .sett-list {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 2px 16px;
 }
 
@@ -311,9 +383,85 @@ body {
   flex-shrink: 0;
 }
 
-/* Single-column modal for auth/settings (weather modal is a 3-col grid on PC). */
-.modal-content.single { max-width: 560px; }
-.modal-content.single .modal-body { display: block; }
+/* Single-column modal for auth (weather modal is a 3-col grid on PC). */
+.modal-content.single { max-width: 760px; }
+.modal-content.single .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+}
+
+/* Settings modal (sett-modal): адаптивная ширина (стандарт ~760px, диапазон 480–920),
+   высота 80% окна браузера; внутри три зоны: header / scrollable body / footer. */
+.modal-content.sett-modal {
+  width: min(920px, max(480px, 55vw), 100%);
+  max-width: 920px;
+  height: 80vh;
+  max-height: 80vh;
+}
+.modal-content.sett-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Settings modal: three fixed zones (header / scrollable cities / footer).
+   Полоски-разделители — 94% ширины модалки, центрированные. */
+.sett-header {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0 -24px 12px;
+  padding: 0 24px 12px;
+}
+.sett-header::after {
+  content: "";
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  bottom: 0;
+  border-bottom: 1px solid var(--border-dim);
+}
+
+.sett-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.sett-footer {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 14px -24px 0;
+  padding: 14px 24px 0;
+}
+.sett-footer::before {
+  content: "";
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  top: 0;
+  border-top: 1px solid var(--border-dim);
+}
+
+/* Внутри настроек заголовки секций — без собственных верхних полосок:
+   разделители дают только .sett-header (низ) и .sett-footer (верх). */
+.modal-content.sett-modal h3 {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.sett-header .sett-section,
+.sett-footer .sett-section {
+  margin-bottom: 0;
+}
 
 /* ---- grid / cards ---------------------------------------------------- */
 main {
@@ -322,6 +470,91 @@ main {
   padding: 8px 16px 24px;
 }
 
+/* ---- help page ------------------------------------------------------- */
+.help-main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 8px 16px 40px;
+}
+
+.help-back {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 17px;
+  white-space: nowrap;
+}
+.help-back:hover,
+.help-back:focus {
+  text-decoration: underline;
+  outline: none;
+}
+
+.help-h2 {
+  color: var(--heading);
+  font-size: 28px;
+  margin: 8px 0 6px;
+}
+
+.help-intro {
+  color: var(--text);
+  font-size: 18px;
+  max-width: 700px;
+}
+
+.help-section {
+  background: var(--card);
+  border: 1px solid var(--border-dim);
+  border-radius: 14px;
+  padding: 18px 22px;
+  margin: 18px 0;
+}
+
+.help-section h3 {
+  color: var(--heading);
+  font-size: 20px;
+  margin: 0 0 10px;
+}
+
+.help-section h4 {
+  color: var(--accent);
+  font-size: 18px;
+  margin: 16px 0 6px;
+}
+
+.help-section p {
+  margin: 8px 0;
+}
+
+.help-section code {
+  background: var(--selection);
+  color: var(--text);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 15px;
+}
+
+.help-code {
+  display: block;
+  background: #1B1330;
+  color: #D8C9A3;
+  border: 1px solid var(--border-dim);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 15px;
+  line-height: 1.5;
+  margin: 10px 0;
+}
+
+.help-list {
+  margin: 8px 0;
+  padding-left: 22px;
+}
+.help-list li {
+  margin: 6px 0;
+}
+
+/* ---- grid / cards ---------------------------------------------------- */
 .grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -664,6 +897,20 @@ main {
   .modal-content {
     width: 90%;
     padding: 20px;
+  }
+  /* Внутренние разделители настроек тоже на всю ширину модалки (padding 20px). */
+  .sett-header {
+    margin: 0 -20px 12px;
+    padding: 0 20px 12px;
+  }
+  .sett-footer {
+    margin: 14px -20px 0;
+    padding: 14px 20px 0;
+  }
+  /* На узких экранах донат складывается в столбик: текст, под ним кнопка. */
+  .donate-cols {
+    grid-template-columns: 1fr;
+    gap: 14px;
   }
 }
 

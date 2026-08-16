@@ -304,6 +304,7 @@
       });
     }
     els.modalContent.classList.remove("single");
+    els.modalContent.classList.remove("sett-modal");
     showModal();
   }
 
@@ -612,6 +613,7 @@
       '</p>';
 
     els.modalContent.classList.add("single");
+    els.modalContent.classList.remove("sett-modal");
     els.modalBody.innerHTML = html;
     showModal();
 
@@ -749,7 +751,8 @@
 
   function renderSettingsModal(allCities) {
     allCitiesCache = allCities || [];
-    var html = '<h2>Настройки</h2>';
+    var html = '<div class="sett-header">' +
+      '<h2>Настройки</h2>';
 
     // Отображение: кратко / полностью.
     html += '<div class="sett-section"><h3>Отображение</h3>' +
@@ -762,10 +765,11 @@
           '<input type="radio" name="display_mode" value="full"' +
           (state.displayMode === "full" ? " checked" : "") + '>' +
           '<span>Полностью</span></label>' +
-      '</div></div>';
+      '</div></div>' +
+    '</div>';
 
     // Города: фильтр + поиск + список чекбоксов (в несколько колонок).
-    html += '<div class="sett-section"><h3>Города</h3>' +
+    html += '<div class="sett-body"><div class="sett-section"><h3>Города</h3>' +
       '<div class="sett-options">' +
         '<label class="sett-radio">' +
           '<input type="radio" name="city_filter" value="all"' +
@@ -782,9 +786,27 @@
       '</div>' +
       '<input type="text" id="sett-search" class="sett-search" ' +
         'placeholder="Поиск города…" autocomplete="off" spellcheck="false">' +
-      '<div class="sett-list"></div></div>';
+      '<div class="sett-list"></div></div></div>';
 
-    els.modalContent.classList.add("single");
+    // Поддержка проекта: заголовок + два столбика (текст слева, кнопки справа).
+    html += '<div class="sett-footer"><div class="sett-section">' +
+      '<h3>Поддержка проекта</h3>' +
+      '<div class="donate-cols">' +
+        '<p class="donate-text">Небосвод — бесплатный и открытый проект, и таким он останется всегда. ' +
+          'Если сервис вам пригодился и хочется сказать спасибо делом, можно поддержать авторов ' +
+          'добровольным переводом. Сумма — на ваше усмотрение, обязательств — никаких: каждый рубль ' +
+          'идёт на развитие проекта и его инфраструктуры.</p>' +
+        '<div class="donate-actions">' +
+          '<a class="help-btn" href="/help.html">' +
+            'Помощь</a>' +
+          '<a class="donate-btn" href="' + DONATE_URL + '" target="_blank" rel="noopener">' +
+            'Облагодарить за проект</a>' +
+        '</div>' +
+      '</div>' +
+    '</div></div>';
+
+    els.modalContent.classList.add("sett-modal");
+    els.modalContent.classList.remove("single");
     els.modalBody.innerHTML = html;
     showModal();
 
