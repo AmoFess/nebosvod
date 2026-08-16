@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Небосвод</title>
+  <link rel="icon" type="image/x-icon" href="nebosvod.ico">
+  <link rel="stylesheet" href="style.css?v=10">
+</head>
+<body>
+  <header class="header">
+    <div class="brand">
+      <img src="logo.png" class="logo" alt="Небосвод">
+      <h1 class="title">Небосвод</h1>
+    </div>
+    <div id="auth-area"></div>
+    <div class="controls">
+      <div class="search-wrap">
+        <input id="search" type="text" placeholder="Добавить город…" autocomplete="off" spellcheck="false">
+        <div id="search-note" class="search-note hidden"></div>
+        <ul id="results" class="results hidden"></ul>
+      </div>
+      <button id="refresh" type="button" class="btn">Обновить</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="cards" class="grid"></div>
+  </main>
+
+  <footer class="footer">
+    <div id="status" class="status"></div>
+  </footer>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div id="modal-overlay" class="modal-overlay"></div>
+    <div id="modal-content" class="modal-content">
+      <button id="modal-close" type="button" class="modal-close" aria-label="Закрыть">✕</button>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="app.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "port": 8080,
+  "cache_ttl": 1200,
+  "locations": [
+    {
+      "id": 524901,
+      "name": "Москва",
+      "alias": "moskva",
+      "latitude": 55.75204,
+      "longitude": 37.61781,
+      "timezone": "Europe/Moscow"
+    },
+    {
+      "id": 498817,
+      "name": "Санкт-Петербург",
+      "alias": "spb",
+      "latitude": 59.93863,
+      "longitude": 30.31413,
+      "timezone": "Europe/Moscow"
+    }
+  ]
+}
