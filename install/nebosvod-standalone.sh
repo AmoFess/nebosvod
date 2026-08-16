@@ -115,18 +115,39 @@ select_ctid() {
 # Ensure the Alpine template is present (download if missing)
 # -----------------------------------------------------------------------------
 ensure_template() {
-  local tpl="alpine-3.20-default_amd64.tar.xz"
+  local tpl=""
 
-  if pveam list "${TEMPLATE_STORAGE}" 2>/dev/null | grep -qF "${tpl}"; then
-    msg_ok "Template ${tpl} already present in '${TEMPLATE_STORAGE}'."
-  else
-    msg_info "Template ${tpl} not found — downloading into '${TEMPLATE_STORAGE}' ..."
+  # 1) Prefer an already-downloaded alpine template on the host (no download).
+  tpl=$(pveam list "${TEMPLATE_STORAGE}" 2>/dev/null \
+          | grep -oE 'alpine-[0-9.]+-default_[0-9]+_amd64\.tar\.xz' \
+          | sort -V | tail -1)
+  if [ -n "$tpl" ]; then
+    msg_ok "Using already-downloaded template: ${tpl}"
+    TEMPLATE="${tpl}"
+    return 0
+  fi
+
+  # 2) Otherwise pick the latest available alpine template and download it.
+  tpl=$(pveam available 2>/dev/null \
+          | grep -E 'alpine-[0-9.]+-default_.*_amd64\.tar\.xz' \
+          | awk '{print $2}' \
+          | sort -V | tail -1)
+  if [ -n "$tpl" ]; then
+    msg_info "No alpine template downloaded — downloading ${tpl} into '${TEMPLATE_STORAGE}' ..."
     pveam update >/dev/null 2>&1 || msg_warn "pveam update failed (continuing with cached list)."
     pveam download "${TEMPLATE_STORAGE}" "${tpl}" || die "Failed to download template ${tpl}."
     msg_ok "Template ${tpl} downloaded."
+    TEMPLATE="${tpl}"
+    return 0
   fi
 
-  TEMPLATE="${tpl}"
+  # 3) Neither downloaded nor available — report the catalog contents and bail out.
+  msg_error "Unable to resolve an alpine-*-default_*_amd64.tar.xz template."
+  msg_error "Already downloaded (pveam list ${TEMPLATE_STORAGE}):"
+  pveam list "${TEMPLATE_STORAGE}" 2>/dev/null || true
+  msg_error "Available in catalog (pveam available):"
+  pveam available 2>/dev/null || true
+  die "No alpine template could be found or downloaded."
 }
 
 # -----------------------------------------------------------------------------
