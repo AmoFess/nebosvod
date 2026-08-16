@@ -42,6 +42,8 @@ python3 server.py
 
 ## Конфигурация
 
+Репозиторий зеркалируется с Forgejo на GitHub автоматически (push mirror).
+
 Скопируйте `config.json.example` в `config.json` и укажите свои города:
 
 ```json
