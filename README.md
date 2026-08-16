@@ -48,8 +48,6 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/AmoFess/nebosvod/main/in
 
 ## Конфигурация
 
-Репозиторий зеркалируется с Forgejo на GitHub автоматически (push mirror).
-
 Скопируйте `config.json.example` в `config.json` и укажите свои города:
 
 ```json
