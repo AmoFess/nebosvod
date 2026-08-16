@@ -12,9 +12,8 @@
 #    NEBO_CTID    — preferred container ID (default: 200, first free >= it)
 #    NEBO_STORAGE — rootfs storage override (default: auto-detect a
 #                   rootdir-capable storage preferring local*/tank*, else local-lvm)
-#    NEBO_GIT_URL — git source URL for the Nebosvod repo (default: local
-#                   Forgejo http://192.168.0.100/Amofess/nebosvod.git;
-#                   set to https://github.com/AmoFess/nebosvod.git when public)
+#    NEBO_GIT_URL — git source URL for the Nebosvod repo (default: GitHub;
+#                   use http://192.168.0.100/Amofess/nebosvod.git for local Forgejo)
 # =============================================================================
 
 set -Eeuo pipefail
@@ -199,7 +198,7 @@ install_app() {
   pct exec "${CTID}" -- apk add --no-cache python3 git || die "apk add failed."
 
   msg_info "Cloning Nebosvod into /opt/nebosvod ..."
-  local repo_url="${NEBO_GIT_URL:-http://192.168.0.100/Amofess/nebosvod.git}"
+  local repo_url="${NEBO_GIT_URL:-https://github.com/AmoFess/nebosvod.git}"
   pct exec "${CTID}" -- env GIT_TERMINAL_PROMPT=0 git clone "$repo_url" /opt/nebosvod \
     || die "git clone failed (check network access inside the container)."
 

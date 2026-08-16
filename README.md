@@ -2,6 +2,8 @@
 
 Лёгкий погодный сервис-прокси поверх [Open-Meteo](https://open-meteo.com). Один процесс на Python stdlib — без внешних зависимостей, работает в Alpine LXC.
 
+Официальный сайт сервиса: [nebosvod.amofess.ru](https://nebosvod.amofess.ru)
+
 Своя веб-морда с тёплой темой «Янтарная ночь», кэширование запросов, API для умного дома (Home Assistant / MajorDoMo) и поддержка нескольких городов.
 
 ## Возможности
@@ -31,14 +33,18 @@
 
 ## Установка
 
-### LXC (Alpine)
+Одна команда на хосте Proxmox (создаёт Alpine LXC, ставит зависимости, клонирует репозиторий и запускает сервис):
 
 ```bash
-apk add python3
-mkdir -p /opt/weather-proxy && cd /opt/weather-proxy
-# скопировать server.py и static/, создать config.json
-python3 server.py
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/AmoFess/nebosvod/main/install/nebosvod-standalone.sh)"
 ```
+
+После установки сервис будет доступен по адресу `http://<ip-контейнера>:8080` (скрипт выведет его в конце).
+
+Опциональные переменные:
+- `NEBO_CTID` — желаемый ID контейнера (по умолчанию первый свободный от 200).
+- `NEBO_STORAGE` — хранилище rootfs (по умолчанию определяется автоматически).
+- `NEBO_GIT_URL` — источник репозитория (по умолчанию GitHub).
 
 ## Конфигурация
 
