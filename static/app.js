@@ -110,15 +110,21 @@
     els.status.className = "status" + (cls ? " " + cls : "");
   }
 
-  // Статус-строка целиком = ссылка на донат (время · следующее обновление · благодарность)
+  // Статус-строка: слева инфо (время · следующее обновление), справа ссылка-благодарность.
   function setStatusDonate(text, cls) {
+    var info = document.createElement("span");
+    info.className = "status-info";
+    info.textContent = text;
+
     var a = document.createElement("a");
     a.href = DONATE_URL;
     a.target = "_blank";
     a.rel = "noopener";
     a.className = "status-link";
-    a.textContent = text;
+    a.textContent = "Облагодарить за проект";
+
     els.status.textContent = "";
+    els.status.appendChild(info);
     els.status.appendChild(a);
     els.status.className = "status" + (cls ? " " + cls : "");
   }
@@ -132,7 +138,7 @@
     var remaining = AUTO_REFRESH_MS - (Date.now() - lastUpdatedAt);
     var tail = remaining <= 0 ? "обновление…" : fmtCountdown(remaining);
     setStatusDonate(
-      "Обновлено: " + fmtClock(lastUpdatedAt) + " · следующее обновление " + tail + " · Облагодарить за проект",
+      "Обновлено: " + fmtClock(lastUpdatedAt) + " · следующее обновление " + tail,
       "ok"
     );
   }

@@ -468,6 +468,10 @@ main {
 }
 
 .status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
   color: var(--dim);
   font-size: 16px;
   min-height: 22px;
@@ -476,10 +480,16 @@ main {
 .status.error { color: var(--error); }
 .status.ok { color: var(--ok); }
 
-/* Вся статус-строка — ссылка на донат */
+/* Инфо о времени обновления — слева, просто текст */
+.status-info {
+  color: var(--dim);
+}
+
+/* Ссылка-благодарность — справа, это ссылка */
 .status-link {
-  color: inherit;
+  color: var(--accent);
   text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
 .status-link:hover,
