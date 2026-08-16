@@ -103,8 +103,23 @@
   }
 
   // ---- loading / status ------------------------------------------------
+  var DONATE_URL = "https://tbank.ru/cf/2yqASL2n1Kc";
+
   function setStatus(text, cls) {
     els.status.textContent = text || "";
+    els.status.className = "status" + (cls ? " " + cls : "");
+  }
+
+  // Статус-строка целиком = ссылка на донат (время · следующее обновление · благодарность)
+  function setStatusDonate(text, cls) {
+    var a = document.createElement("a");
+    a.href = DONATE_URL;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.className = "status-link";
+    a.textContent = text;
+    els.status.textContent = "";
+    els.status.appendChild(a);
     els.status.className = "status" + (cls ? " " + cls : "");
   }
 
@@ -116,7 +131,10 @@
     }
     var remaining = AUTO_REFRESH_MS - (Date.now() - lastUpdatedAt);
     var tail = remaining <= 0 ? "обновление…" : fmtCountdown(remaining);
-    setStatus("Обновлено: " + fmtClock(lastUpdatedAt) + " · следующее обновление " + tail, "ok");
+    setStatusDonate(
+      "Обновлено: " + fmtClock(lastUpdatedAt) + " · следующее обновление " + tail + " · Облагодарить за проект",
+      "ok"
+    );
   }
 
   function showLoading() {

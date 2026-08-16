@@ -476,6 +476,18 @@ main {
 .status.error { color: var(--error); }
 .status.ok { color: var(--ok); }
 
+/* Вся статус-строка — ссылка на донат */
+.status-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.status-link:hover,
+.status-link:focus {
+  text-decoration: underline;
+  outline: none;
+}
+
 /* ---- modal ----------------------------------------------------------- */
 .modal {
   position: fixed;
