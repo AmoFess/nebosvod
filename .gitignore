@@ -6,7 +6,7 @@ nebosvod.db
 config.json
 
 # Внутренние рабочие документы (промпты задач разработки)
-prompt_task*.md
+prompt_*.md
 
 # Python
 __pycache__/

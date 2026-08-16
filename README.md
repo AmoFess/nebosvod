@@ -1,6 +1,6 @@
 # Небосвод
 
-Лёгкий погодный сервис-прокси поверх [Open-Meteo](https://open-meteo.com). Один процесс на Python stdlib — без внешних зависимостей, одинаково работает в Alpine LXC и в Docker.
+Лёгкий погодный сервис-прокси поверх [Open-Meteo](https://open-meteo.com). Один процесс на Python stdlib — без внешних зависимостей, работает в Alpine LXC.
 
 Своя веб-морда с тёплой темой «Янтарная ночь», кэширование запросов, API для умного дома (Home Assistant / MajorDoMo) и поддержка нескольких городов.
 
@@ -30,13 +30,6 @@
 ```
 
 ## Установка
-
-### Docker
-
-```bash
-docker build -t nebosvod .
-docker run -d -p 8080:8080 -v $(pwd)/config.json:/app/config.json nebosvod
-```
 
 ### LXC (Alpine)
 
