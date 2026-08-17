@@ -405,6 +405,9 @@ body {
   max-width: 920px;
   height: 80vh;
   max-height: 80vh;
+  /* Сам контейнер — flex-колонка; скролл остаётся только внутри .sett-body. */
+  display: flex;
+  flex-direction: column;
 }
 .modal-content.sett-modal .modal-body {
   display: flex;
@@ -412,7 +415,7 @@ body {
   align-items: stretch;
   gap: 0;
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -917,6 +920,48 @@ main {
   .donate-cols {
     grid-template-columns: 1fr;
     gap: 14px;
+  }
+  /* Ограничиваем длинный текст о поддержке: иначе футер занимает почти всю
+     модалку и список городов (.sett-body) схлопывается в ноль. */
+  .donate-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    overflow: hidden;
+  }
+  /* Компактный прогноз на телефоне: меньше шапка и плотнее блоки. */
+  .modal-content:not(.sett-modal):not(.single) h2 {
+    font-size: 20px;
+    margin-bottom: 2px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .modal-emoji {
+    font-size: 38px;
+    margin: 2px 0 4px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .meta {
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .section {
+    padding: 10px 12px;
+    margin-bottom: 10px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .section h3 {
+    font-size: 15px;
+    margin-bottom: 6px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .detail {
+    font-size: 15px;
+    gap: 4px 10px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .section .detail {
+    padding: 3px 4px;
+    margin: 0 -4px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .updated {
+    font-size: 13px;
+    margin-top: 8px;
   }
 }
 
