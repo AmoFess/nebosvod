@@ -4,6 +4,8 @@
 
 Официальный сайт сервиса: [nebosvod.amofess.ru](https://nebosvod.amofess.ru)
 
+Официальное зеркало: [nebosvod.smkot.ru](https://nebosvod.smkot.ru/)
+
 Своя веб-морда с тёплой темой «Янтарная ночь», кэширование запросов, API для умного дома (Home Assistant / MajorDoMo) и поддержка нескольких городов.
 
 ## Возможности
