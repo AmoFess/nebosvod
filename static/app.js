@@ -11,6 +11,13 @@
   var debounceTimer = null;
   var pendingRefresh = false;
 
+  // ---- client-side cache (localStorage) -------------------------------
+  var WEATHER_CACHE_KEY = "nebosvod_weather_cache_v1";
+  var WEATHER_CACHE_MAX = 20;                              // максимум городов в кэше
+  var WEATHER_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // 7 дней
+  var weatherCache = {};   // city_id -> {data, savedAt}
+  var ignoreCache = false; // true при принудительном обновлении (refresh=1)
+
   var state = {
     user: null,         // username или null (гость)
     enabled: null,      // Set включённых city_id для пользователя; null у гостя
@@ -102,6 +109,94 @@
     });
   }
 
+  // ---- client-side cache (localStorage) -------------------------------
+  // Сохраняем погоду по городам, чтобы при возвращении пользователь сразу
+  // видел последние данные, а не пустые карточки, пока идёт запрос к серверу.
+  function loadWeatherCache() {
+    try {
+      var raw = localStorage.getItem(WEATHER_CACHE_KEY);
+      if (!raw) return;
+      var obj = JSON.parse(raw);
+      if (!obj || typeof obj !== "object") return;
+      if (typeof obj.lastUpdatedAt === "number") {
+        lastUpdatedAt = obj.lastUpdatedAt;
+      }
+      var entries = obj.cities;
+      if (!entries || typeof entries !== "object") return;
+      var now = Date.now();
+      for (var id in entries) {
+        if (!Object.prototype.hasOwnProperty.call(entries, id)) continue;
+        var e = entries[id];
+        if (!e || !e.data || typeof e.data !== "object") continue;
+        var savedAt = typeof e.savedAt === "number" ? e.savedAt : 0;
+        if (now - savedAt > WEATHER_CACHE_MAX_AGE_MS) continue; // устарело — не берём
+        weatherCache[id] = { data: e.data, savedAt: savedAt };
+      }
+    } catch (e) {
+      // Повреждённый JSON или недоступный localStorage — игнорируем.
+      weatherCache = {};
+    }
+  }
+
+  function pruneWeatherCache() {
+    var ids = Object.keys(weatherCache);
+    if (ids.length <= WEATHER_CACHE_MAX) return;
+    ids.sort(function (a, b) {
+      return (weatherCache[a].savedAt || 0) - (weatherCache[b].savedAt || 0);
+    });
+    var keep = ids.slice(0, WEATHER_CACHE_MAX);
+    var next = {};
+    for (var i = 0; i < keep.length; i++) {
+      next[keep[i]] = weatherCache[keep[i]];
+    }
+    weatherCache = next;
+  }
+
+  function saveWeatherCache() {
+    try {
+      pruneWeatherCache();
+      var entries = {};
+      var ids = Object.keys(weatherCache);
+      for (var i = 0; i < ids.length; i++) {
+        entries[ids[i]] = weatherCache[ids[i]];
+      }
+      localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify({
+        lastUpdatedAt: lastUpdatedAt,
+        cities: entries
+      }));
+    } catch (e) {
+      // localStorage переполнен или недоступен — молча пропускаем.
+    }
+  }
+
+  function addToWeatherCache(cityId, data) {
+    weatherCache[String(cityId)] = { data: data, savedAt: Date.now() };
+    saveWeatherCache();
+  }
+
+  function getCachedWeather(cityId) {
+    if (ignoreCache) return null;
+    var e = weatherCache[String(cityId)];
+    if (!e || !e.data) return null;
+    if (Date.now() - (e.savedAt || 0) > WEATHER_CACHE_MAX_AGE_MS) return null;
+    return e.data;
+  }
+
+  function seedWeatherFromCache() {
+    if (ignoreCache) return false;
+    var seeded = false;
+    for (var id in weatherCache) {
+      if (!Object.prototype.hasOwnProperty.call(weatherCache, id)) continue;
+      if (weatherByCity[id]) continue; // свежие данные уже есть
+      var data = getCachedWeather(id);
+      if (data) {
+        weatherByCity[id] = data;
+        seeded = true;
+      }
+    }
+    return seeded;
+  }
+
   // ---- loading / status ------------------------------------------------
   var DONATE_URL = "https://tbank.ru/cf/2yqASL2n1Kc";
 
@@ -172,7 +267,6 @@
   }
 
   function renderCards() {
-    if (loading) return;
     els.cards.innerHTML = "";
     var vis = visibleCities();
     if (!vis.length) {
@@ -191,7 +285,7 @@
   }
 
   function renderCard(city, full) {
-    var data = weatherByCity[city.id];
+    var data = weatherByCity[city.id] || getCachedWeather(city.id);
     var card = document.createElement("div");
     card.className = "card";
 
@@ -383,6 +477,7 @@
     if (refresh) url += "&refresh=1";
     return api(url).then(function (data) {
       weatherByCity[cityId] = data;
+      addToWeatherCache(cityId, data);
       return { ok: true, cityId: cityId };
     }).catch(function (err) {
       return { ok: false, cityId: cityId, error: err };
@@ -414,9 +509,14 @@
       pendingRefresh = true;
       return Promise.resolve();
     }
+    ignoreCache = !!force;
     showLoading();
     return loadCities()
-      .then(function () { return loadWeather(force); })
+      .then(function () {
+        // Если есть кэш — показываем его сразу, не дожидаясь сети.
+        if (seedWeatherFromCache()) renderCards();
+        return loadWeather(force);
+      })
       .catch(function () {
         setStatus("Не удалось загрузить список городов", "error");
       })
@@ -424,6 +524,7 @@
         hideLoading();
         renderCards();
         renderStatus();
+        ignoreCache = false;
         if (pendingRefresh) {
           pendingRefresh = false;
           refreshAll(force);
@@ -921,6 +1022,7 @@
       modalBody: $("modal-body"),
       authArea: $("auth-area")
     };
+    loadWeatherCache();
     bindEvents();
     renderAuth();
     initAuth()

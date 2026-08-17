@@ -576,10 +576,9 @@ class WeatherService:
         self.config_lock = threading.Lock()
         self.flight_locks = {}          # city_id -> Lock (single flight per city)
         self.flight_guard = threading.Lock()
-        # ProxyHandler({}) bypasses env proxies (http_proxy / https_proxy / no_proxy).
-        self.opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({})
-        )
+        # Используем прокси из env (HTTP_PROXY/HTTPS_PROXY), если задан —
+        # в LXC-контейнере наружу можно ходить только через mihomo-прокси роутера.
+        self.opener = urllib.request.build_opener()
 
     # ---- config ---------------------------------------------------------
     def _load_config(self):

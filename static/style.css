@@ -907,6 +907,29 @@ main {
     width: 90%;
     padding: 20px;
   }
+  /* На мобильных вся модалка настроек скроллится целиком (шапка + города +
+     футер вместе), без закреплённых зон и узкой полосы прокрутки списка. */
+  .modal-content.sett-modal {
+    height: auto;
+    max-height: 85vh;
+    display: block;
+  }
+  .modal-content.sett-modal .modal-body {
+    display: block;
+    flex: none;
+    min-height: auto;
+  }
+  .sett-header,
+  .sett-footer {
+    flex: none;
+  }
+  .sett-body {
+    flex: none;
+    min-height: auto;
+    overflow: visible;
+    padding-right: 0;
+    -webkit-overflow-scrolling: auto;
+  }
   /* Внутренние разделители настроек тоже на всю ширину модалки (padding 20px). */
   .sett-header {
     margin: 0 -20px 12px;
