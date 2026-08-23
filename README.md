@@ -48,6 +48,16 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/AmoFess/nebosvod/main/in
 - `NEBO_STORAGE` — хранилище rootfs (по умолчанию определяется автоматически).
 - `NEBO_GIT_URL` — источник репозитория (по умолчанию GitHub).
 
+## Обновление
+
+Чтобы обновить уже установленный контейнер до последней версии (без переустановки и без потери пользователей и городов):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/AmoFess/nebosvod/main/install/nebosvod-update.sh)"
+```
+
+Скрипт найдёт контейнер Небосвода, сделает резервную копию базы и конфигурации, подтянет обновления кода и перезапустит сервис. База пользователей и список городов сохраняются.
+
 ## Конфигурация
 
 Скопируйте `config.json.example` в `config.json` и укажите свои города:
