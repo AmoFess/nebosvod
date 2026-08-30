@@ -39,6 +39,7 @@ die()       { msg_error "$*"; exit 1; }
 CTID=""
 IP=""
 APP_DIR=""
+SERVICE=""
 BACKUP_TS=""
 UPDATE_METHOD=""
 
@@ -314,16 +315,32 @@ rm -rf nebosvod-update-src
 }
 
 # -----------------------------------------------------------------------------
+# Determine the actual OpenRC service name for Nebosvod in the container.
+# Some installs use "nebosvod", others "weather" or "weather-proxy".
+# -----------------------------------------------------------------------------
+detect_service() {
+  local s
+  for s in nebosvod weather weather-proxy; do
+    if pct exec "$CTID" -- test -x "/etc/init.d/$s" >/dev/null 2>&1; then
+      SERVICE="$s"
+      msg_ok "Service name in container: ${SERVICE}"
+      return 0
+    fi
+  done
+  die "No Nebosvod OpenRC service found (looked for /etc/init.d/nebosvod, weather, weather-proxy)."
+}
+
+# -----------------------------------------------------------------------------
 # Restart the OpenRC service
 # -----------------------------------------------------------------------------
 restart_service() {
-  msg_info "Restarting 'nebosvod' service ..."
-  if pct exec "$CTID" -- rc-service nebosvod restart; then
+  msg_info "Restarting '${SERVICE}' service ..."
+  if pct exec "$CTID" -- rc-service "$SERVICE" restart; then
     msg_ok "Service restarted."
   else
     msg_warn "rc-service restart failed — trying stop/start ..."
-    pct exec "$CTID" -- rc-service nebosvod stop  || msg_warn "rc-service stop failed."
-    pct exec "$CTID" -- rc-service nebosvod start || die "rc-service start failed."
+    pct exec "$CTID" -- rc-service "$SERVICE" stop  || msg_warn "rc-service stop failed."
+    pct exec "$CTID" -- rc-service "$SERVICE" start || die "rc-service start failed."
     msg_ok "Service started via stop/start."
   fi
   sleep 2
@@ -359,7 +376,7 @@ get_ip() {
 # -----------------------------------------------------------------------------
 verify_service() {
   msg_info "Verifying service is up ..."
-  pct exec "$CTID" -- rc-service nebosvod status || msg_warn "rc-service status reported non-zero."
+  pct exec "$CTID" -- rc-service "$SERVICE" status || msg_warn "rc-service status reported non-zero."
 
   local ok=0
   if [ -n "$IP" ] && [ "$IP" != "dhcp" ] && command -v curl >/dev/null 2>&1; then
@@ -392,6 +409,7 @@ print_summary() {
     msg_info "Container IP  : (not auto-detected; find with: pct exec ${CTID} -- ip -4 addr show eth0)"
   fi
   msg_info "App directory : ${APP_DIR}"
+  msg_info "Service name  : ${SERVICE}"
   msg_info "Update method : ${UPDATE_METHOD}"
   msg_info "DB + cities   : preserved (nebosvod.db and config.json are never overwritten)"
   msg_info "Backup        : $APP_DIR/backup/ (timestamp ${BACKUP_TS})"
@@ -405,6 +423,7 @@ main() {
   check_env
   ask_ctid
   setup_appdir
+  detect_service
   ensure_running
   backup_data
 
