@@ -36,6 +36,7 @@ die()       { msg_error "$*"; exit 1; }
 
 CTID=""
 IP=""
+APP_DIR=""
 BACKUP_TS=""
 UPDATE_METHOD=""
 
@@ -50,9 +51,45 @@ check_env() {
 
 # -----------------------------------------------------------------------------
 # Detect the Nebosvod container.
-# Match = hostname "nebosvod" OR /opt/nebosvod/server.py present.
-# Exactly one match required — never guess, never create.
+# Recognises both the legacy /opt/weather-proxy layout (hostname "weather")
+# and the standard /opt/nebosvod layout (hostname "nebosvod").
+# If detection is ambiguous or fails, ASKS the user for the container ID.
+# Never creates a container.
 # -----------------------------------------------------------------------------
+
+# In a candidate container, find the app root (where server.py lives).
+resolve_app_dir() {
+  local id="$1"
+  for d in /opt/nebosvod /opt/weather-proxy; do
+    if pct exec "$id" -- sh -c "test -f $d/server.py" >/dev/null 2>&1; then
+      printf '%s' "$d"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Ask the user to type a container ID; validate it is a real,
+# Nebosvod-running container.
+ask_ctid() {
+  msg_warn "Auto-detection could not pick a unique container."
+  msg_warn "Please type the container ID of the Nebosvod install (e.g. 1200)."
+  msg_info "Current LXC containers:"
+  pct list 2>/dev/null | awk 'NR==1 || /nebosvod|weather/'
+  printf 'Container ID> '
+  read -r USER_CTID || { echo; die "No input given — aborting."; }
+  case "${USER_CTID}" in
+    ''|*[!0-9]*) die "Invalid container ID: '${USER_CTID}'." ;;
+  esac
+  pct status "${USER_CTID}" >/dev/null 2>&1 || die "Container ${USER_CTID} does not exist (pct status failed)."
+  local dir
+  dir=$(resolve_app_dir "$USER_CTID")
+  [ -n "$dir" ] || die "Container ${USER_CTID} has no Nebosvod install (no server.py in /opt/nebosvod or /opt/weather-proxy)."
+  CTID="$USER_CTID"
+  APP_DIR="$dir"
+  msg_ok "Using container ID from user input: ${CTID} (app dir: ${APP_DIR})"
+}
+
 detect_container() {
   # Explicit pin via env var
   if [ -n "${NEBO_CTID:-}" ]; then
@@ -61,45 +98,53 @@ detect_container() {
     esac
     pct status "${NEBO_CTID}" >/dev/null 2>&1 || die "Pinned container ${NEBO_CTID} does not exist."
     CTID="${NEBO_CTID}"
-    msg_ok "Using pinned container ID (NEBO_CTID): ${CTID}"
+    local d; d="$(resolve_app_dir "$CTID")"
+    [ -n "$d" ] || die "Pinned container ${NEBO_CTID} has no Nebosvod install in /opt/nebosvod or /opt/weather-proxy."
+    APP_DIR="$d"
+    msg_ok "Using pinned container ID (NEBO_CTID): ${CTID} (app dir: ${APP_DIR})"
     return 0
   fi
 
-  msg_info "Detecting the Nebosvod container (hostname 'nebosvod' OR /opt/nebosvod/server.py) ..."
+  msg_info "Detecting the Nebosvod container (hostname 'nebosvod'/'weather' OR server.py in /opt/nebosvod or /opt/weather-proxy) ..."
 
-  local ids=() id name has_server candidates found=()
+  local ids=() id name found=()
+  local candidates=""
   mapfile -t ids < <(pct list 2>/dev/null | awk 'NR>1 && $1 ~ /^[0-9]+$/ {print $1}')
 
   for id in "${ids[@]}"; do
     [ -n "$id" ] || continue
     name=$(pct config "$id" 2>/dev/null | awk -F': ' 'tolower($1)=="hostname" {gsub(/[[:space:]]/,"",$2); print $2; exit}')
-    has_server=0
-    pct exec "$id" -- sh -c 'test -f /opt/nebosvod/server.py' >/dev/null 2>&1 && has_server=1
-
-    if [ "$name" = "nebosvod" ] || [ "$has_server" -eq 1 ]; then
+    local dir
+    dir="$(resolve_app_dir "$id")"
+    local matched=0
+    if [ "$name" = "nebosvod" ] || [ "$name" = "weather" ] || [ -n "$dir" ]; then
+      matched=1
+    fi
+    if [ "$matched" -eq 1 ]; then
       found+=("$id")
-      candidates="${candidates}  - CT ${id}: hostname=${name:-<unknown>}, /opt/nebosvod/server.py=$( [ "$has_server" -eq 1 ] && echo present || echo absent )\n"
+      candidates+="  - CT ${id}: hostname=${name:-<unknown>}, app_dir=${dir:-<none>}\n"
     fi
   done
 
+  # Nothing found -> ask the user rather than dying.
   if [ "${#found[@]}" -eq 0 ]; then
-    msg_error "No Nebosvod container found."
-    msg_error "Searched every LXC container for hostname 'nebosvod' or /opt/nebosvod/server.py."
-    msg_error "Current containers (pct list):"
-    pct list 2>/dev/null || true
-    msg_error "If Nebosvod lives elsewhere, re-run with NEBO_CTID=<id>."
-    die "Aborting — this script NEVER creates a container."
+    msg_error "No Nebosvod container auto-detected (hostname 'nebosvod'/'weather' or server.py in a known location)."
+    ask_ctid
+    return 0
   fi
 
-  if [ "${#found[@]}" -gt 1 ]; then
-    msg_error "Multiple candidate containers found — refusing to guess:"
-    printf "${candidates}" >&2
-    msg_error "Re-run with NEBO_CTID=<id> to pick the correct one."
-    die "Aborting."
+  # Exactly one -> use it.
+  if [ "${#found[@]}" -eq 1 ]; then
+    CTID="${found[0]}"
+    APP_DIR="$(resolve_app_dir "$CTID")"
+    msg_ok "Detected Nebosvod container: ${CTID} (app dir: ${APP_DIR:-/opt/nebosvod})"
+    return 0
   fi
 
-  CTID="${found[0]}"
-  msg_ok "Detected Nebosvod container: ${CTID}"
+  # Multiple -> show them, ask the user to pick.
+  msg_warn "Multiple candidate containers found:"
+  printf "${candidates}" >&2
+  ask_ctid
 }
 
 # -----------------------------------------------------------------------------
@@ -137,29 +182,29 @@ ensure_running() {
 # Belt-and-suspenders backup of DB and config (old backups are never deleted)
 # -----------------------------------------------------------------------------
 backup_data() {
-  pct exec "$CTID" -- test -d /opt/nebosvod \
-    || die "/opt/nebosvod not found in container ${CTID} — this does not look like a Nebosvod install."
+  pct exec "$CTID" -- test -d "$APP_DIR" \
+    || die "$APP_DIR not found in container ${CTID} — this does not look like a Nebosvod install."
 
   BACKUP_TS=$(date +%Y%m%d-%H%M%S)
   msg_info "Backing up nebosvod.db and config.json (timestamp ${BACKUP_TS}) ..."
 
-  pct exec "$CTID" -- mkdir -p /opt/nebosvod/backup \
-    || die "Failed to create /opt/nebosvod/backup."
+  pct exec "$CTID" -- mkdir -p "$APP_DIR/backup" \
+    || die "Failed to create $APP_DIR/backup."
 
-  if pct exec "$CTID" -- test -f /opt/nebosvod/nebosvod.db; then
-    pct exec "$CTID" -- cp -a /opt/nebosvod/nebosvod.db "/opt/nebosvod/backup/nebosvod.db.${BACKUP_TS}" \
+  if pct exec "$CTID" -- test -f "$APP_DIR/nebosvod.db"; then
+    pct exec "$CTID" -- cp -a "$APP_DIR/nebosvod.db" "$APP_DIR/backup/nebosvod.db.${BACKUP_TS}" \
       || die "Backup of nebosvod.db failed."
-    msg_ok "Backed up nebosvod.db -> /opt/nebosvod/backup/nebosvod.db.${BACKUP_TS}"
+    msg_ok "Backed up nebosvod.db -> $APP_DIR/backup/nebosvod.db.${BACKUP_TS}"
   else
-    msg_warn "/opt/nebosvod/nebosvod.db not found — skipping its backup."
+    msg_warn "$APP_DIR/nebosvod.db not found — skipping its backup."
   fi
 
-  if pct exec "$CTID" -- test -f /opt/nebosvod/config.json; then
-    pct exec "$CTID" -- cp -a /opt/nebosvod/config.json "/opt/nebosvod/backup/config.json.${BACKUP_TS}" \
+  if pct exec "$CTID" -- test -f "$APP_DIR/config.json"; then
+    pct exec "$CTID" -- cp -a "$APP_DIR/config.json" "$APP_DIR/backup/config.json.${BACKUP_TS}" \
       || die "Backup of config.json failed."
-    msg_ok "Backed up config.json -> /opt/nebosvod/backup/config.json.${BACKUP_TS}"
+    msg_ok "Backed up config.json -> $APP_DIR/backup/config.json.${BACKUP_TS}"
   else
-    msg_warn "/opt/nebosvod/config.json not found — skipping its backup."
+    msg_warn "$APP_DIR/config.json not found — skipping its backup."
   fi
 }
 
@@ -183,21 +228,22 @@ derive_tarball_url() {
 # repo (caller falls back to manual file replacement). Dies on real failures.
 # -----------------------------------------------------------------------------
 update_via_git() {
-  if ! pct exec "$CTID" -- sh -c 'cd /opt/nebosvod && git rev-parse --is-inside-work-tree' >/dev/null 2>&1; then
-    msg_warn "/opt/nebosvod is not a git working tree — falling back to manual file replacement."
+  if ! pct exec "$CTID" -- sh -c "cd $APP_DIR && git rev-parse --is-inside-work-tree" >/dev/null 2>&1; then
+    msg_warn "$APP_DIR is not a git working tree — falling back to manual file replacement."
     return 1
   fi
 
   msg_info "Updating code via git fast-forward (git fetch + git merge --ff-only) ..."
 
-  local inline='
+  local inline
+  inline="
 set -e
-cd /opt/nebosvod
+cd $APP_DIR
 git fetch origin
-branch=$(git rev-parse --abbrev-ref HEAD)
-[ -n "$branch" ] || branch=main
-git merge --ff-only "origin/$branch"
-'
+branch=\$(git rev-parse --abbrev-ref HEAD)
+[ -n \"\$branch\" ] || branch=main
+git merge --ff-only \"origin/\$branch\"
+"
 
   if pct exec "$CTID" -- sh -c "$inline"; then
     UPDATE_METHOD="git fast-forward pull (fetch + merge --ff-only)"
@@ -207,23 +253,24 @@ git merge --ff-only "origin/$branch"
 
   msg_warn "Fast-forward failed (local changes to tracked files or diverged history). Trying git stash ..."
 
-  local inline2='
+  local inline2
+  inline2="
 set -e
-cd /opt/nebosvod
-git stash push -m "nebosvod-update autostash"
-branch=$(git rev-parse --abbrev-ref HEAD)
-[ -n "$branch" ] || branch=main
-git merge --ff-only "origin/$branch"
-'
+cd $APP_DIR
+git stash push -m \"nebosvod-update autostash\"
+branch=\$(git rev-parse --abbrev-ref HEAD)
+[ -n \"\$branch\" ] || branch=main
+git merge --ff-only \"origin/\$branch\"
+"
   local merge_ok=0
   if pct exec "$CTID" -- sh -c "$inline2"; then
     merge_ok=1
   fi
 
-  if pct exec "$CTID" -- sh -c 'cd /opt/nebosvod && git stash pop'; then
+  if pct exec "$CTID" -- sh -c "cd $APP_DIR && git stash pop"; then
     msg_ok "Stashed local changes restored."
   else
-    msg_warn "git stash pop failed — local changes kept in the stash (check: pct exec ${CTID} -- sh -c 'cd /opt/nebosvod && git stash list')."
+    msg_warn "git stash pop failed — local changes kept in the stash (check: pct exec ${CTID} -- sh -c 'cd $APP_DIR && git stash list')."
   fi
 
   if [ "$merge_ok" -eq 1 ]; then
@@ -233,7 +280,7 @@ git merge --ff-only "origin/$branch"
   fi
 
   msg_error "Git update failed even after stash (diverged history or conflict)."
-  msg_error "Inspect manually: pct exec ${CTID} -- sh -c 'cd /opt/nebosvod && git status'"
+  msg_error "Inspect manually: pct exec ${CTID} -- sh -c 'cd $APP_DIR && git status'"
   die "Aborting update."
 }
 
@@ -263,21 +310,22 @@ update_manual() {
   pct push "$CTID" "$tmp_tar" /tmp/nebosvod-update.tar.gz || { rm -f "$tmp_tar"; die "pct push failed."; }
   rm -f "$tmp_tar"
 
-  local inline='
+  local inline
+  inline="
 set -e
 cd /tmp
 rm -rf nebosvod-update-src
 mkdir -p nebosvod-update-src
 tar -xzf /tmp/nebosvod-update.tar.gz -C nebosvod-update-src --strip-components=1
 if [ ! -f nebosvod-update-src/server.py ]; then
-  echo "archive is missing server.py" >&2
+  echo \"archive is missing server.py\" >&2
   exit 1
 fi
-cp nebosvod-update-src/server.py /opt/nebosvod/server.py
-rm -rf /opt/nebosvod/static
-cp -a nebosvod-update-src/static /opt/nebosvod/static
+cp nebosvod-update-src/server.py $APP_DIR/server.py
+rm -rf $APP_DIR/static
+cp -a nebosvod-update-src/static $APP_DIR/static
 rm -rf nebosvod-update-src /tmp/nebosvod-update.tar.gz
-'
+"
 
   pct exec "$CTID" -- sh -c "$inline" || die "Manual file replacement failed."
   UPDATE_METHOD="manual (tarball replace of server.py + static/)"
@@ -367,7 +415,7 @@ print_summary() {
   fi
   msg_info "Update method : ${UPDATE_METHOD}"
   msg_info "DB + cities   : preserved (nebosvod.db and config.json are gitignored, never overwritten)"
-  msg_info "Backup        : /opt/nebosvod/backup/nebosvod.db.${BACKUP_TS} and config.json.${BACKUP_TS}"
+  msg_info "Backup        : $APP_DIR/backup/nebosvod.db.${BACKUP_TS} and config.json.${BACKUP_TS}"
   echo
 }
 
