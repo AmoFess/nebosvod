@@ -98,6 +98,38 @@
         <code>msg.payload.current.temperature</code>.
       </p>
 
+      <h4>MajorDoMo</h4>
+      <p>
+        Рабочий пример метода <code>getWeather</code> для MajorDoMo —
+        обновляет свойства устройства погодой из сервиса:
+      </p>
+      <pre class="help-code">$url = "{{BASE}}/api/weather?city_id=".$this->getProperty('city_id');
+$raw = getURL($url, 0);
+$data = json_decode($raw, true);
+
+$this->setProperty("sunrise", $data['daily']['sunrise']);
+$this->setProperty("sunset", $data['daily']['sunset']);
+
+$this->setProperty("current_temp", round($data['current']['temperature']));
+$this->setProperty("current_feels_like", round($data['current']['feels_like']));
+$this->setProperty("current_humidity", $data['current']['humidity']);
+$this->setProperty("current_pressure", $data['current']['pressure_mmhg']);
+$this->setProperty("current_wind_speed", round($data['current']['wind_speed'], 1));
+$this->setProperty("current_wind_dir", $data['current']['wind_direction']);
+$this->setProperty("current_condition", $data['current']['condition']);
+
+$this->setProperty("daily_temp_max", round($data['daily']['temp_max']));
+$this->setProperty("daily_temp_min", round($data['daily']['temp_min']));
+$this->setProperty("daily_wind_speed_max", round($data['daily']['wind_speed_max'], 1));
+$this->setProperty("daily_wind_dir_dominant", $data['daily']['wind_direction_dominant']);
+$this->setProperty("daily_condition", $data['daily']['condition']);
+
+$this->setProperty("nightly_temp_max", round($data['nightly']['temp_max']));
+$this->setProperty("nightly_temp_min", round($data['nightly']['temp_min']));
+$this->setProperty("nightly_wind_speed_max", $data['nightly']['wind_speed_max']);
+$this->setProperty("nightly_wind_dir_dominant", $data['nightly']['wind_direction_dominant']);
+$this->setProperty("nightly_condition", $data['nightly']['condition']);</pre>
+
       <h4>Любой скрипт</h4>
       <p>Например, на bash:</p>
       <pre class="help-code">curl -s "{{BASE}}/api/weather?city=ekb" \
