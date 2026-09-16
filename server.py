@@ -744,7 +744,13 @@ class WeatherService:
         return int(self.config.get("cache_ttl", 1800))
 
     # ---- HTTP helpers ---------------------------------------------------
-    def _get_json(self, url, timeout=10, headers=None, attempts=3, retry_delay=1.5):
+    def _get_json(self, url, timeout=None, headers=None, attempts=None, retry_delay=1.5):
+        # Значения по умолчанию берём из конфига: при недоступном источнике
+        # важно не держать страницу долго (10 с × 3 попытки = 35 с простоя).
+        if timeout is None:
+            timeout = int(self.config.get("upstream_timeout", 10))
+        if attempts is None:
+            attempts = max(1, int(self.config.get("upstream_attempts", 2)))
         hdrs = {
             "User-Agent": USER_AGENT,
             "Accept": "application/json",

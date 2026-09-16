@@ -3,6 +3,8 @@
   "cache_ttl": 1200,
   "warmup_on_start": true,
   "background_refresh_minutes": 20,
+  "upstream_timeout": 10,
+  "upstream_attempts": 2,
   "locations": [
     {
       "id": 524901,

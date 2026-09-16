@@ -540,11 +540,15 @@
       }
       if (okCount > 0) lastUpdatedAt = Date.now();
       if (failCount > 0) {
-        setStatus("Ошибка обновления для " + failCount + " городов (показаны старые данные)",
-          "error");
+        if (okCount === 0) {
+          setStatus("Источник погоды недоступен — данные не получены", "error");
+        } else {
+          setStatus("Ошибка обновления для " + failCount + " городов (показаны старые данные)",
+            "error");
+        }
       }
     }).catch(function () {
-      setStatus("Не удалось обновить погоду (показаны старые данные)", "error");
+      setStatus("Не удалось получить погоду — источник не ответил", "error");
     });
   }
 
