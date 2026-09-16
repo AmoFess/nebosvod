@@ -5,6 +5,7 @@
   "background_refresh_minutes": 20,
   "upstream_timeout": 10,
   "upstream_attempts": 2,
+  "open_meteo_http": false,
   "locations": [
     {
       "id": 524901,

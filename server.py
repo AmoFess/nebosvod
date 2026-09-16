@@ -53,6 +53,26 @@ HOURLY_VARS = (
     "wind_direction_10m,weather_code,precipitation,precipitation_probability"
 )
 
+
+def apply_open_meteo_scheme(config):
+    """Переводит запросы к Open-Meteo на http://, если сеть блокирует TLS.
+
+    ТСПУ/ДПИ могут резать TLS-рукопожатие к api.open-meteo.com по SNI, при
+    этом обычный http:// на :80 продолжает работать. Для таких сетей в
+    config.json включают `"open_meteo_http": true` — запросы к прогнозу и
+    геокодингу уходят по http:// в обход блокировки.
+
+    Без этого ключа поведение кода не меняется (https по умолчанию).
+    """
+    if not config.get("open_meteo_http"):
+        return
+    global FORECAST_URL, GEOCODE_SEARCH_URL, GEOCODE_GET_URL
+    FORECAST_URL = FORECAST_URL.replace("https://", "http://", 1)
+    GEOCODE_SEARCH_URL = GEOCODE_SEARCH_URL.replace("https://", "http://", 1)
+    GEOCODE_GET_URL = GEOCODE_GET_URL.replace("https://", "http://", 1)
+    print("upstream: Open-Meteo через http:// (open_meteo_http=true)", flush=True)
+
+
 USER_AGENT = "weather-proxy/1.0"
 
 WEATHER_CODES = {
@@ -606,6 +626,16 @@ def fmt_updated_at(utc_offset_seconds):
 class WeatherService:
     def __init__(self):
         self.config = self._load_config()
+        apply_open_meteo_scheme(self.config)
+        if self.config.get("open_meteo_http"):
+            # http-фронтенд Open-Meteo не тянет большие пакетные ответы:
+            # запросы с hourly сразу на несколько городов виснут или отдают
+            # 503. Поэтому по http города тянутся по одному.
+            try:
+                chunk = int(self.config.get("open_meteo_http_batch_chunk", 1))
+            except (TypeError, ValueError):
+                chunk = 1
+            self.BATCH_CHUNK = max(1, chunk)
         self.cache = {}                 # city_id -> {"fetched_at": ts, "data": {...}}
         self.cache_lock = threading.Lock()
         self.config_lock = threading.Lock()
@@ -689,15 +719,33 @@ class WeatherService:
                              name="bg-refresh", daemon=True).start()
 
     def _warmup(self):
-        """Обновляет все города сразу после старта, чтобы кэш был свежим."""
+        """Обновляет все города сразу после старта, чтобы кэш был свежим.
+
+        Каждый город пробует отдельно: сбой одного (например, сеть ещё
+        не готова) не останавливает прогрев остальных.
+        """
+        # Короткая пауза перед стартом: сеть/прокси в контейнере успевают
+        # подняться, иначе первый же запрос может зависнуть.
+        time.sleep(5)
         try:
             ids = [int(c["id"]) for c in self.get_locations()]
-            for start in range(0, len(ids), self.BATCH_CHUNK):
-                chunk = ids[start:start + self.BATCH_CHUNK]
-                self.get_weather_batch(chunk, refresh=True)
-            print("warmup: обновлено городов — %d" % len(ids), flush=True)
-        except Exception as e:  # noqa: BLE001 - прогрев не должен ронять сервис
-            print("warmup: не удалось обновить (%s)" % e, flush=True)
+        except Exception as e:  # noqa: BLE001
+            print("warmup: не удалось получить список городов (%s)" % e,
+                  flush=True)
+            return
+        done = 0
+        for start in range(0, len(ids), self.BATCH_CHUNK):
+            chunk = ids[start:start + self.BATCH_CHUNK]
+            try:
+                res = self.get_weather_batch(chunk, refresh=True)
+                done += len(res)
+            except Exception as e:  # noqa: BLE001 - прогрев не роняет сервис
+                print("warmup: %s" % e, flush=True)
+        # Снимок целиком: троттлинг _save_cache мог пропустить последнюю
+        # запись, а файл нужен полным для мгновенного старта после рестарта.
+        self._save_cache(force=True)
+        print("warmup: обновлено городов — %d/%d" % (done, len(ids)),
+              flush=True)
 
     def _background_loop(self, minutes):
         """Тихо обновляет города каждые N минут, чтобы кэш не остывал."""
@@ -705,10 +753,18 @@ class WeatherService:
             time.sleep(minutes * 60)
             try:
                 ids = [int(c["id"]) for c in self.get_locations()]
-                for start in range(0, len(ids), self.BATCH_CHUNK):
-                    self._fetch_many(ids[start:start + self.BATCH_CHUNK])
             except Exception as e:  # noqa: BLE001
                 print("bg-refresh: %s" % e, flush=True)
+                continue
+            for start in range(0, len(ids), self.BATCH_CHUNK):
+                chunk = ids[start:start + self.BATCH_CHUNK]
+                try:
+                    self._fetch_many(chunk)
+                except Exception as e:  # noqa: BLE001 - один город не валит цикл
+                    print("bg-refresh: %s" % e, flush=True)
+            # Полный снимок после цикла (троттлинг _save_cache пропускает
+            # промежуточные записи, а файл должен быть свежим).
+            self._save_cache(force=True)
 
     # ---- config ---------------------------------------------------------
     def _load_config(self):
