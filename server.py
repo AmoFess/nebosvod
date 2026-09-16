@@ -24,6 +24,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DB_PATH = os.path.join(BASE_DIR, "nebosvod.db")
+# Персистентный кэш погоды: переживает перезапуск сервиса, поэтому после
+# рестарта страница сразу получает данные, а не ждёт внешний источник.
+CACHE_PATH = os.path.join(BASE_DIR, "cache.json")
 
 SESSION_COOKIE = "neb_session"
 
@@ -608,9 +611,104 @@ class WeatherService:
         self.config_lock = threading.Lock()
         self.flight_locks = {}          # city_id -> Lock (single flight per city)
         self.flight_guard = threading.Lock()
+        self._save_lock = threading.Lock()
+        self._last_save = 0.0
+        self._bg_lock = threading.Lock()
+        self._bg_pending = set()        # города, которые уже обновляются в фоне
         # Используем прокси из env (HTTP_PROXY/HTTPS_PROXY), если задан —
         # в LXC-контейнере наружу можно ходить только через mihomo-прокси роутера.
         self.opener = urllib.request.build_opener()
+        # Кэш с диска: старт сервиса становится мгновенным, а данные —
+        # уже готовыми (их обновит прогрев/фон).
+        self._load_cache()
+
+    # ---- persistent cache ------------------------------------------------
+    def _load_cache(self):
+        """Восстанавливает кэш с диска (если файл есть и читается)."""
+        try:
+            with open(CACHE_PATH, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except FileNotFoundError:
+            return
+        except (OSError, json.JSONDecodeError) as e:  # noqa: BLE001
+            print("cache: не удалось прочитать %s (%s)" % (CACHE_PATH, e),
+                  flush=True)
+            return
+        cities = raw.get("cities") if isinstance(raw, dict) else None
+        if not isinstance(cities, dict):
+            return
+        restored = 0
+        for key, entry in cities.items():
+            try:
+                city_id = int(key)
+                data = entry["data"]
+                fetched_at = float(entry["fetched_at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            self.cache[city_id] = {"fetched_at": fetched_at, "data": data}
+            restored += 1
+        if restored:
+            print("cache: восстановлено городов из файла — %d" % restored,
+                  flush=True)
+
+    def _save_cache(self, force=False):
+        """Сохраняет кэш на диск. Не чаще раза в 10 секунд (если не force)."""
+        now = time.time()
+        with self._save_lock:
+            if not force and (now - self._last_save) < 10:
+                return
+            self._last_save = now
+            with self.cache_lock:
+                snapshot = {
+                    "saved_at": now,
+                    "cities": {
+                        str(cid): {"fetched_at": e["fetched_at"],
+                                   "data": e["data"]}
+                        for cid, e in self.cache.items()
+                    },
+                }
+        tmp = CACHE_PATH + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False)
+            os.replace(tmp, CACHE_PATH)
+        except OSError as e:  # noqa: BLE001
+            print("cache: не удалось сохранить (%s)" % e, flush=True)
+
+    # ---- warm-up / background refresh ------------------------------------
+    def start_background_tasks(self):
+        """Фоновый прогрев при старте и периодическое обновление кэша."""
+        if self.config.get("warmup_on_start", True):
+            threading.Thread(target=self._warmup, name="warmup",
+                             daemon=True).start()
+        minutes = int(self.config.get("background_refresh_minutes", 20) or 0)
+        if minutes > 0:
+            threading.Thread(target=self._background_loop, args=(minutes,),
+                             name="bg-refresh", daemon=True).start()
+
+    def _warmup(self):
+        """Обновляет все города сразу после старта, чтобы кэш был свежим."""
+        try:
+            ids = [int(c["id"]) for c in self.get_locations()]
+            for start in range(0, len(ids), self.BATCH_CHUNK):
+                chunk = ids[start:start + self.BATCH_CHUNK]
+                self.get_weather_batch(chunk, refresh=True)
+            print("warmup: обновлено городов — %d" % len(ids), flush=True)
+        except Exception as e:  # noqa: BLE001 - прогрев не должен ронять сервис
+            print("warmup: не удалось обновить (%s)" % e, flush=True)
+
+    def _background_loop(self, minutes):
+        """Тихо обновляет города каждые N минут, чтобы кэш не остывал."""
+        while True:
+            time.sleep(minutes * 60)
+            try:
+                ids = [int(c["id"]) for c in self.get_locations()]
+                for start in range(0, len(ids), self.BATCH_CHUNK):
+                    self._fetch_many(ids[start:start + self.BATCH_CHUNK])
+            except Exception as e:  # noqa: BLE001
+                print("bg-refresh: %s" % e, flush=True)
 
     # ---- config ---------------------------------------------------------
     def _load_config(self):
@@ -722,60 +820,93 @@ class WeatherService:
     # Cities per upstream request. Keeps the URL sane and the call fast.
     BATCH_CHUNK = 60
 
-    def get_weather_batch(self, city_ids, refresh=False):
-        """Weather for many cities at once.
-
-        Fresh cache entries are served straight from memory; everything else is
-        fetched in a few multi-coordinate Open-Meteo calls. If the upstream is
-        down, the last successful copy is served (stale-while-error) and cities
-        with no cached copy are simply omitted from the result.
-        """
-        result = {}
-        now = time.time()
-        missing = []
-        for city_id in city_ids:
-            with self.cache_lock:
-                entry = self.cache.get(city_id)
-            if (not refresh and entry
-                    and (now - entry["fetched_at"]) < self.cache_ttl):
-                result[city_id] = entry["data"]
-            else:
-                missing.append(city_id)
-
-        pending = []
-        for city_id in missing:
-            city = self.find_city(city_id=city_id)
-            if city is not None:
-                pending.append((city_id, city))
-        if not pending:
-            return result
-
-        upstream_failed = False
-        for start in range(0, len(pending), self.BATCH_CHUNK):
-            chunk = pending[start:start + self.BATCH_CHUNK]
-            try:
-                om_list = self.fetch_open_meteo_batch([c for _, c in chunk])
-            except OpenMeteoError:
-                upstream_failed = True
-                break
-            for (city_id, city), om in zip(chunk, om_list):
+    def _fetch_many(self, city_ids):
+        """Синхронно тянет города из Open-Meteo пачками и кладёт в кэш."""
+        updated = {}
+        for start in range(0, len(city_ids), self.BATCH_CHUNK):
+            chunk = city_ids[start:start + self.BATCH_CHUNK]
+            pairs = []
+            for city_id in chunk:
+                city = self.find_city(city_id=city_id)
+                if city is not None:
+                    pairs.append((city_id, city))
+            if not pairs:
+                continue
+            om_list = self.fetch_open_meteo_batch([c for _, c in pairs])
+            for (city_id, city), om in zip(pairs, om_list):
                 data = self.build_weather(city, om)
                 with self.cache_lock:
                     self.cache[city_id] = {
                         "fetched_at": time.time(),
                         "data": data,
                     }
-                result[city_id] = data
+                updated[city_id] = data
+        if updated:
+            self._save_cache()
+        return updated
 
-        if upstream_failed:
-            # Serve whatever last-good copy we have for the remaining cities.
-            for city_id, _ in pending:
-                if city_id in result:
-                    continue
-                with self.cache_lock:
-                    entry = self.cache.get(city_id)
-                if entry:
-                    result[city_id] = self._stale_copy(entry)
+    def _refresh_many_in_background(self, city_ids):
+        """Тихо обновляет города в отдельном потоке.
+
+        Клиент при этом уже получил данные из кэша (мгновенно), а свежие
+        подтянутся следом. Повторный запуск для тех же городов не создаётся.
+        """
+        with self._bg_lock:
+            new_ids = [c for c in city_ids if c not in self._bg_pending]
+            if not new_ids:
+                return
+            self._bg_pending.update(new_ids)
+
+        def work():
+            try:
+                self._fetch_many(new_ids)
+            except OpenMeteoError:
+                pass
+            except Exception as e:  # noqa: BLE001 - фон не должен шуметь
+                print("bg-refresh: %s" % e, flush=True)
+            finally:
+                with self._bg_lock:
+                    for city_id in new_ids:
+                        self._bg_pending.discard(city_id)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def get_weather_batch(self, city_ids, refresh=False):
+        """Weather for many cities at once.
+
+        Fresh cache entries are served straight from memory. Stale entries are
+        served immediately and refreshed in the background (stale-while-
+        revalidate); cities with no cached copy are fetched synchronously.
+        If the upstream is down, the last successful copy is served and cities
+        with no cached copy are omitted from the result.
+        """
+        result = {}
+        now = time.time()
+        missing = []
+        stale_ids = []
+        for city_id in city_ids:
+            with self.cache_lock:
+                entry = self.cache.get(city_id)
+            if entry and not refresh and (now - entry["fetched_at"]) < self.cache_ttl:
+                result[city_id] = entry["data"]
+            elif entry and not refresh:
+                result[city_id] = self._stale_copy(entry)
+                stale_ids.append(city_id)
+            else:
+                missing.append(city_id)
+
+        if stale_ids:
+            self._refresh_many_in_background(stale_ids)
+
+        if missing:
+            try:
+                result.update(self._fetch_many(missing))
+            except OpenMeteoError:
+                for city_id in missing:
+                    with self.cache_lock:
+                        entry = self.cache.get(city_id)
+                    if entry:
+                        result[city_id] = self._stale_copy(entry)
         return result
 
     def build_weather(self, city, om):
@@ -938,9 +1069,15 @@ class WeatherService:
         now = time.time()
         with self.cache_lock:
             entry = self.cache.get(city_id)
-        if (not refresh and entry
-                and (now - entry["fetched_at"]) < self.cache_ttl):
-            return entry["data"]
+
+        if entry and not refresh:
+            if (now - entry["fetched_at"]) < self.cache_ttl:
+                return entry["data"]
+            if allow_stale:
+                # Просроченный кэш: отдаём сразу и обновляем в фоне —
+                # клиент не ждёт внешний источник.
+                self._refresh_many_in_background([city_id])
+                return self._stale_copy(entry)
 
         lock = self._flight_lock(city_id)
         with lock:
@@ -965,6 +1102,7 @@ class WeatherService:
                 raise
             with self.cache_lock:
                 self.cache[city_id] = {"fetched_at": time.time(), "data": data}
+            self._save_cache()
             return data
 
     def _stale_copy(self, entry):
@@ -1664,6 +1802,8 @@ def main():
     service = WeatherService()
     service.auth = AuthStore(DB_PATH)
     Handler.service = service
+    # Старт: мгновенно отдаём кэш с диска, параллельно прогреваем в фоне.
+    service.start_background_tasks()
     port = int(os.environ.get("WEATHER_PORT", service.config.get("port", 8080)))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
@@ -1673,6 +1813,7 @@ def main():
     except KeyboardInterrupt:
         print("weather-proxy shutting down", flush=True)
     finally:
+        service._save_cache(force=True)
         server.server_close()
 
 

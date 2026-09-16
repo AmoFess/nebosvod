@@ -1,6 +1,8 @@
 {
   "port": 8080,
   "cache_ttl": 1200,
+  "warmup_on_start": true,
+  "background_refresh_minutes": 20,
   "locations": [
     {
       "id": 524901,
