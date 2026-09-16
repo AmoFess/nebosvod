@@ -21,6 +21,7 @@
   var state = {
     user: null,         // username или null (гость)
     enabled: null,      // Set включённых city_id для пользователя; null у гостя
+    order: null,        // порядок плиток пользователя (массив city_id)
     displayMode: "compact",  // "compact" | "full"
     cityFilter: "all"        // "all" | "selected" | "selected_first"
   };
@@ -249,21 +250,53 @@
   }
 
   // ---- render ----------------------------------------------------------
+  // Порядок плиток, заданный пользователем (включённые города — первыми).
+  function applyOrder(list) {
+    var order = state.order;
+    if (!order || !order.length) return list;
+    var pos = {};
+    for (var i = 0; i < order.length; i++) pos[order[i]] = i;
+    return list.slice().sort(function (a, b) {
+      var pa = pos[a.id], pb = pos[b.id];
+      if (pa === undefined && pb === undefined) return 0;
+      if (pa === undefined) return 1;
+      if (pb === undefined) return -1;
+      return pa - pb;
+    });
+  }
+
   function visibleCities() {
     var set = state.enabled;
     if (!set) return cities;   // гость — все города
     var mode = state.cityFilter || "all";
     if (mode === "selected") {
-      return cities.filter(function (c) { return set.has(c.id); });
+      return applyOrder(cities.filter(function (c) { return set.has(c.id); }));
     }
     if (mode === "selected_first") {
       var enabled = [], rest = [];
       for (var i = 0; i < cities.length; i++) {
         (set.has(cities[i].id) ? enabled : rest).push(cities[i]);
       }
-      return enabled.concat(rest);
+      return applyOrder(enabled).concat(applyOrder(rest));
     }
-    return cities;
+    return applyOrder(cities);
+  }
+
+  // Включённые города в порядке пользователя — для блока сортировки.
+  function orderEnabled() {
+    var set = state.enabled || new Set();
+    var res = [], seen = {};
+    var order = state.order || [];
+    for (var i = 0; i < order.length; i++) {
+      if (set.has(order[i]) && !seen[order[i]]) {
+        res.push(order[i]); seen[order[i]] = 1;
+      }
+    }
+    for (var j = 0; j < cities.length; j++) {
+      var id = cities[j].id;
+      if (set.has(id) && !seen[id]) { res.push(id); seen[id] = 1; }
+    }
+    return res;
   }
 
   function renderCards() {
@@ -319,6 +352,16 @@
           '<span>☀ ' + esc(d.sunrise || "—") + '</span>' +
           '<span>☾ ' + esc(d.sunset || "—") + '</span>' +
         '</div>';
+    }
+
+    if (data.stale) {
+      var badge = document.createElement("span");
+      badge.className = "card-stale";
+      badge.textContent = "устарело";
+      badge.title = "Свежие данные получить не удалось — показаны последние полученные";
+      var nameEl = card.querySelector(".card-name") || card.querySelector("h2");
+      if (nameEl) nameEl.appendChild(badge);
+      else card.appendChild(badge);
     }
 
     card.addEventListener("click", function () { openModal(city); });
@@ -472,35 +515,36 @@
     });
   }
 
-  function fetchOne(cityId, refresh) {
-    var url = "/api/weather?city_id=" + encodeURIComponent(cityId);
-    if (refresh) url += "&refresh=1";
-    return api(url).then(function (data) {
-      weatherByCity[cityId] = data;
-      addToWeatherCache(cityId, data);
-      return { ok: true, cityId: cityId };
-    }).catch(function (err) {
-      return { ok: false, cityId: cityId, error: err };
-    });
-  }
-
   function loadWeather(refresh) {
     var vis = visibleCities();
     if (!vis.length) {
       renderCards();
       return Promise.resolve();
     }
-    var jobs = vis.map(function (c) { return fetchOne(c.id, refresh); });
-    return Promise.all(jobs).then(function (results) {
+    // Один batch-запрос на все видимые города вместо запроса на каждый.
+    var ids = vis.map(function (c) { return c.id; });
+    var url = "/api/weather?city_ids=" + ids.join(",");
+    if (refresh) url += "&refresh=1";
+    return api(url).then(function (data) {
+      var results = data.results || {};
       var okCount = 0, failCount = 0;
-      for (var i = 0; i < results.length; i++) {
-        if (results[i].ok) okCount++; else failCount++;
+      for (var i = 0; i < ids.length; i++) {
+        var item = results[String(ids[i])];
+        if (item) {
+          weatherByCity[ids[i]] = item;
+          addToWeatherCache(ids[i], item);
+          okCount++;
+        } else {
+          failCount++;
+        }
       }
       if (okCount > 0) lastUpdatedAt = Date.now();
       if (failCount > 0) {
         setStatus("Ошибка обновления для " + failCount + " городов (показаны старые данные)",
           "error");
       }
+    }).catch(function () {
+      setStatus("Не удалось обновить погоду (показаны старые данные)", "error");
     });
   }
 
@@ -656,12 +700,14 @@
     return api("/api/me").then(function (data) {
       state.user = data.user || null;
       state.enabled = new Set(data.cities || []);
+      state.order = data.city_order || data.cities || [];
       state.displayMode = data.display_mode || "compact";
       state.cityFilter = data.city_filter || "all";
       return state.user;
     }).catch(function () {
       state.user = null;
       state.enabled = null;
+      state.order = null;
       state.displayMode = "compact";
       state.cityFilter = "all";
       return null;
@@ -671,6 +717,7 @@
   function syncEnabled() {
     if (!state.user) {
       state.enabled = null;
+      state.order = null;
       state.displayMode = "compact";
       state.cityFilter = "all";
       return Promise.resolve();
@@ -678,6 +725,7 @@
     return api("/api/me").then(function (data) {
       state.user = data.user || state.user;
       state.enabled = new Set(data.cities || []);
+      state.order = data.city_order || data.cities || [];
       state.displayMode = data.display_mode || "compact";
       state.cityFilter = data.city_filter || "all";
     }).catch(function () {
@@ -775,6 +823,7 @@
     api("/api/logout", { method: "POST" }).then(function () {
       state.user = null;
       state.enabled = null;
+      state.order = null;
       state.displayMode = "compact";
       state.cityFilter = "all";
       renderAuth();
@@ -782,6 +831,7 @@
     }).catch(function () {
       state.user = null;
       state.enabled = null;
+      state.order = null;
       state.displayMode = "compact";
       state.cityFilter = "all";
       renderAuth();
@@ -850,6 +900,67 @@
     settingsSearchTimer = setTimeout(renderSettList, 150);
   }
 
+  // ---- порядок плиток (для зарегистрированных) --------------------------
+  function renderOrderList() {
+    var box = els.modalBody.querySelector(".sett-order");
+    if (!box) return;
+    var ids = orderEnabled();
+    box.innerHTML = "";
+    if (!ids.length) {
+      var p = document.createElement("p");
+      p.className = "sett-empty";
+      p.textContent = "Включите города — здесь появится их порядок.";
+      box.appendChild(p);
+      return;
+    }
+    var names = {};
+    for (var k = 0; k < cities.length; k++) names[cities[k].id] = cities[k].name;
+    for (var i = 0; i < ids.length; i++) {
+      var id = ids[i];
+      var row = document.createElement("div");
+      row.className = "sett-order-row";
+      row.innerHTML =
+        '<span class="sett-order-name">' + esc(names[id] || id) + '</span>' +
+        '<span class="sett-order-actions">' +
+          '<button type="button" class="ord-btn" data-id="' + id + '" data-dir="-1"' +
+            (i === 0 ? " disabled" : "") + ' aria-label="Выше">↑</button>' +
+          '<button type="button" class="ord-btn" data-id="' + id + '" data-dir="1"' +
+            (i === ids.length - 1 ? " disabled" : "") + ' aria-label="Ниже">↓</button>' +
+        '</span>';
+      box.appendChild(row);
+    }
+    var btns = box.querySelectorAll(".ord-btn");
+    for (var b = 0; b < btns.length; b++) {
+      btns[b].addEventListener("click", onMoveCity);
+    }
+  }
+
+  function onMoveCity(e) {
+    var btn = e.currentTarget;
+    var cityId = parseInt(btn.getAttribute("data-id"), 10);
+    var delta = parseInt(btn.getAttribute("data-dir"), 10);
+    var ids = orderEnabled();
+    var i = ids.indexOf(cityId);
+    if (i < 0) return;
+    var j = i + delta;
+    if (j < 0 || j >= ids.length) return;
+    var tmp = ids[i]; ids[i] = ids[j]; ids[j] = tmp;
+    state.order = ids;
+
+    btn.disabled = true;
+    api("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ city_order: ids })
+    }).then(function () {
+      renderOrderList();
+      renderCards();
+    }).catch(function () {
+      setStatus("Не удалось сохранить порядок плиток", "error");
+      syncEnabled().then(function () { renderOrderList(); });
+    });
+  }
+
   function renderSettingsModal(allCities) {
     allCitiesCache = allCities || [];
     var html = '<div class="sett-header">' +
@@ -887,7 +998,14 @@
       '</div>' +
       '<input type="text" id="sett-search" class="sett-search" ' +
         'placeholder="Поиск города…" autocomplete="off" spellcheck="false">' +
-      '<div class="sett-list"></div></div></div>';
+      '<div class="sett-list"></div>' +
+      (state.user
+        ? '<div class="sett-order-wrap"><h3>Порядок плиток</h3>' +
+            '<p class="sett-hint">Стрелками двигайте включённые города — ' +
+            'в этом порядке они показываются на главной.</p>' +
+            '<div class="sett-order"></div></div>'
+        : '') +
+      '</div></div>';
 
     // Поддержка проекта: заголовок + два столбика (текст слева, кнопки справа).
     html += '<div class="sett-footer"><div class="sett-section">' +
@@ -912,6 +1030,7 @@
     showModal();
 
     renderSettList();
+    renderOrderList();
 
     var searchEl = els.modalBody.querySelector("#sett-search");
     if (searchEl) {
@@ -974,6 +1093,10 @@
         if (enabled) state.enabled.add(cityId);
         else state.enabled.delete(cityId);
       }
+      // Порядок: новый город — в конец, выключенный — убираем.
+      var order = (state.order || []).filter(function (id) { return id !== cityId; });
+      if (enabled) order.push(cityId);
+      state.order = order;
       refreshAll(false);
     }).catch(function () {
       checkbox.checked = !enabled;

@@ -300,9 +300,19 @@ class AuthStore:
                     "CREATE TABLE IF NOT EXISTS user_cities ("
                     "user_id INTEGER,"
                     "city_id INTEGER,"
+                    "position INTEGER,"
                     "PRIMARY KEY(user_id, city_id)"
                     ")"
                 )
+                # Migration: per-user tile order for older databases.
+                ucols = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(user_cities)").fetchall()
+                }
+                if "position" not in ucols:
+                    conn.execute(
+                        "ALTER TABLE user_cities ADD COLUMN position INTEGER"
+                    )
                 conn.execute(
                     "CREATE TABLE IF NOT EXISTS sessions ("
                     "token TEXT PRIMARY KEY,"
@@ -390,10 +400,32 @@ class AuthStore:
                 rows = conn.execute(
                     "SELECT uc.city_id FROM user_cities uc"
                     " JOIN users u ON u.id = uc.user_id"
-                    " WHERE u.username = ? ORDER BY uc.city_id",
+                    " WHERE u.username = ?"
+                    " ORDER BY uc.position IS NULL, uc.position, uc.city_id",
                     (username,),
                 ).fetchall()
                 return [int(r["city_id"]) for r in rows]
+            finally:
+                conn.close()
+
+    def set_user_cities_order(self, username, ordered_ids):
+        """Store the user's tile order. Only already-enabled cities are updated."""
+        with self.lock:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT id FROM users WHERE username = ?", (username,)
+                ).fetchone()
+                if row is None:
+                    return
+                user_id = int(row["id"])
+                for idx, city_id in enumerate(ordered_ids):
+                    conn.execute(
+                        "UPDATE user_cities SET position = ?"
+                        " WHERE user_id = ? AND city_id = ?",
+                        (idx, user_id, int(city_id)),
+                    )
+                conn.commit()
             finally:
                 conn.close()
 
@@ -663,6 +695,89 @@ class WeatherService:
             raise OpenMeteoError(data.get("reason", "Open-Meteo error"))
         return data
 
+    def fetch_open_meteo_batch(self, cities):
+        """One Open-Meteo call for many coordinates.
+
+        Open-Meteo accepts comma-separated latitude/longitude lists and returns
+        a JSON array with one element per location, in the same order.
+        """
+        params = {
+            "latitude": ",".join(str(c["latitude"]) for c in cities),
+            "longitude": ",".join(str(c["longitude"]) for c in cities),
+            "current": CURRENT_VARS,
+            "daily": DAILY_VARS,
+            "hourly": HOURLY_VARS,
+            "past_days": 1,
+            "windspeed_unit": "ms",
+            "timezone": "auto",
+        }
+        url = FORECAST_URL + "?" + urllib.parse.urlencode(params)
+        data = self._get_json(url)
+        if isinstance(data, dict):
+            if data.get("error"):
+                raise OpenMeteoError(data.get("reason", "Open-Meteo error"))
+            data = [data]
+        return data
+
+    # Cities per upstream request. Keeps the URL sane and the call fast.
+    BATCH_CHUNK = 60
+
+    def get_weather_batch(self, city_ids, refresh=False):
+        """Weather for many cities at once.
+
+        Fresh cache entries are served straight from memory; everything else is
+        fetched in a few multi-coordinate Open-Meteo calls. If the upstream is
+        down, the last successful copy is served (stale-while-error) and cities
+        with no cached copy are simply omitted from the result.
+        """
+        result = {}
+        now = time.time()
+        missing = []
+        for city_id in city_ids:
+            with self.cache_lock:
+                entry = self.cache.get(city_id)
+            if (not refresh and entry
+                    and (now - entry["fetched_at"]) < self.cache_ttl):
+                result[city_id] = entry["data"]
+            else:
+                missing.append(city_id)
+
+        pending = []
+        for city_id in missing:
+            city = self.find_city(city_id=city_id)
+            if city is not None:
+                pending.append((city_id, city))
+        if not pending:
+            return result
+
+        upstream_failed = False
+        for start in range(0, len(pending), self.BATCH_CHUNK):
+            chunk = pending[start:start + self.BATCH_CHUNK]
+            try:
+                om_list = self.fetch_open_meteo_batch([c for _, c in chunk])
+            except OpenMeteoError:
+                upstream_failed = True
+                break
+            for (city_id, city), om in zip(chunk, om_list):
+                data = self.build_weather(city, om)
+                with self.cache_lock:
+                    self.cache[city_id] = {
+                        "fetched_at": time.time(),
+                        "data": data,
+                    }
+                result[city_id] = data
+
+        if upstream_failed:
+            # Serve whatever last-good copy we have for the remaining cities.
+            for city_id, _ in pending:
+                if city_id in result:
+                    continue
+                with self.cache_lock:
+                    entry = self.cache.get(city_id)
+                if entry:
+                    result[city_id] = self._stale_copy(entry)
+        return result
+
     def build_weather(self, city, om):
         current = om.get("current") or {}
         daily = om.get("daily") or {}
@@ -819,7 +934,7 @@ class WeatherService:
             },
         }
 
-    def get_weather(self, city_id, refresh=False):
+    def get_weather(self, city_id, refresh=False, allow_stale=True):
         now = time.time()
         with self.cache_lock:
             entry = self.cache.get(city_id)
@@ -840,10 +955,24 @@ class WeatherService:
             city = self.find_city(city_id=city_id)
             if city is None:
                 return None
-            data = self.build_weather(city, self.fetch_open_meteo(city))
+            try:
+                data = self.build_weather(city, self.fetch_open_meteo(city))
+            except OpenMeteoError:
+                # stale-while-error: upstream is down, but we still have the
+                # last good copy — serve it instead of an empty tile.
+                if allow_stale and entry:
+                    return self._stale_copy(entry)
+                raise
             with self.cache_lock:
                 self.cache[city_id] = {"fetched_at": time.time(), "data": data}
             return data
+
+    def _stale_copy(self, entry):
+        """Last successful reading, flagged so clients can mark it as stale."""
+        stale = dict(entry["data"])
+        stale["stale"] = True
+        stale["stale_age"] = int(max(0, time.time() - entry["fetched_at"]))
+        return stale
 
     def _flight_lock(self, city_id):
         with self.flight_guard:
@@ -1289,9 +1418,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(401, {"error": "not_logged_in"})
             return
         prefs = self.service.auth.get_display_prefs(user)
+        user_cities = self.service.auth.get_user_cities(user)
         self.send_json(200, {
             "user": user,
-            "cities": self.service.auth.get_user_cities(user),
+            "cities": user_cities,
+            "city_order": user_cities,
             "display_mode": prefs["display_mode"],
             "city_filter": prefs["city_filter"],
         })
@@ -1363,6 +1494,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True})
             return
 
+        if "city_order" in payload:
+            order = payload.get("city_order")
+            if (not isinstance(order, list) or len(order) > 500
+                    or not all(isinstance(x, int) and not isinstance(x, bool)
+                               for x in order)):
+                self.send_json(400, {"error": "bad_request"})
+                return
+            self.service.auth.set_user_cities_order(user, order)
+            self.send_json(200, {"ok": True})
+            return
+
         try:
             city_id = int(payload.get("city_id"))
         except (TypeError, ValueError):
@@ -1375,6 +1517,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(200, {"ok": True})
 
     def handle_weather(self, qs):
+        # Batch form: /api/weather?city_ids=1,2,3 — one request for many cities.
+        city_ids_raw = (qs.get("city_ids") or [None])[0]
+        if city_ids_raw:
+            self.handle_weather_batch(city_ids_raw, qs)
+            return
+
         city_id_raw = (qs.get("city_id") or [None])[0]
         alias = (qs.get("city") or [None])[0]
         refresh = (qs.get("refresh") or ["0"])[0] in ("1", "true", "yes")
@@ -1417,6 +1565,49 @@ class Handler(BaseHTTPRequestHandler):
             })
             return
         self.send_json(200, data)
+
+    def handle_weather_batch(self, raw, qs):
+        refresh = (qs.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+        ids = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                ids.append(int(part))
+            except (TypeError, ValueError):
+                self.send_json(400, {
+                    "error": "Invalid city_ids",
+                    "reason": "bad_parameter",
+                })
+                return
+        if not ids:
+            self.send_json(400, {
+                "error": "Missing city_ids",
+                "reason": "no_parameter",
+            })
+            return
+        if len(ids) > 200:
+            self.send_json(400, {
+                "error": "Too many city_ids (max 200)",
+                "reason": "too_many",
+            })
+            return
+
+        # Keep the caller's order and drop duplicates.
+        seen = set()
+        ordered = []
+        for city_id in ids:
+            if city_id not in seen:
+                seen.add(city_id)
+                ordered.append(city_id)
+
+        results = self.service.get_weather_batch(ordered, refresh=refresh)
+        missing = [cid for cid in ordered if cid not in results]
+        self.send_json(200, {
+            "results": {str(k): v for k, v in results.items()},
+            "missing": missing,
+        })
 
     def handle_geocode(self, qs):
         q = (qs.get("q") or [None])[0]
