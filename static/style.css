@@ -42,7 +42,7 @@ body {
   flex-wrap: wrap;
   gap: 12px;
   padding: 20px 16px 12px;
-  max-width: 1200px;
+  max-width: 1325px;
   margin: 0 auto;
 }
 
@@ -532,7 +532,7 @@ body {
 
 /* ---- grid / cards ---------------------------------------------------- */
 main {
-  max-width: 1200px;
+  max-width: 1325px;
   margin: 0 auto;
   padding: 8px 16px 24px;
 }
@@ -670,17 +670,27 @@ main {
   vertical-align: middle;
 }
 
+/* Иконка + температура в одной строке: иконка слева, температура справа. */
+.card-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 4px 0;
+}
+
 .card-temp {
   font-size: 56px;
   font-weight: 700;
   color: var(--text);
   line-height: 1.05;
-  margin: 4px 0;
+  margin: 0;
 }
 
 .card-emoji { font-size: 44px; line-height: 1; }
 
-.card-condition { color: var(--accent); font-size: 19px; margin-top: 4px; }
+/* Статус погоды — третья строка, по правому краю. */
+.card-condition { color: var(--accent); font-size: 19px; margin-top: 4px; text-align: right; }
 
 .card-rows {
   margin-top: 14px;
@@ -776,7 +786,7 @@ main {
 
 /* ---- footer / status ------------------------------------------------- */
 .footer {
-  max-width: 1200px;
+  max-width: 1325px;
   margin: 0 auto;
   padding: 0 16px 24px;
 }

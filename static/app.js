@@ -350,8 +350,10 @@
 
       card.innerHTML =
         '<div class="card-name">' + esc(city.name) + '</div>' +
-        '<div class="card-emoji">' + emoji + '</div>' +
-        '<div class="card-temp">' + fmtVal(c.temperature, "°") + '</div>' +
+        '<div class="card-main">' +
+          '<span class="card-emoji">' + emoji + '</span>' +
+          '<span class="card-temp">' + fmtVal(c.temperature, "°") + '</span>' +
+        '</div>' +
         '<div class="card-condition">' + esc(c.condition || "") + '</div>' +
         '<div class="card-rows">' +
           row("Ощущается", fmtVal(c.feels_like, "°")) +
