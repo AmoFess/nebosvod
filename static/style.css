@@ -896,6 +896,8 @@ main {
   align-items: center;
   gap: 14px;
   margin-bottom: 14px;
+  /* Кнопка закрытия — 44px + отступ 12px + зазор 12px. */
+  padding-right: 68px;
 }
 
 .modal-header .modal-emoji {
