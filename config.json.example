@@ -6,6 +6,7 @@
   "upstream_timeout": 10,
   "upstream_attempts": 2,
   "open_meteo_http": false,
+  "open_meteo_fallback_hosts": [],
   "locations": [
     {
       "id": 524901,

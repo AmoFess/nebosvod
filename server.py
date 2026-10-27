@@ -73,6 +73,48 @@ def apply_open_meteo_scheme(config):
     print("upstream: Open-Meteo через http:// (open_meteo_http=true)", flush=True)
 
 
+OPEN_METEO_FALLBACK_HOSTS = []
+OPEN_METEO_API_HOST = "api.open-meteo.com"
+
+
+def apply_open_meteo_hosts(config):
+    """Подменяет хост Open-Meteo на адрес из fallback-списка.
+
+    Случай боя 27.10.2026: DNS указывает на IP (157.90.83.168), который
+    провайдер глушит целиком (и :443, и :80). При этом другие IP Open-Meteo
+    (выясняются через PTR-записи вида customer-api-euXX.open-meteo.com)
+    работают нормально, если ходить на них напрямую с заголовком Host.
+
+    Ключ `open_meteo_fallback_hosts` — список IP или host:port строк.
+    Каждый элемент подставляется в URL-ы вместо api.open-meteo.com,
+    к запросам добавляется заголовок Host: api.open-meteo.com, чтобы
+    бэкенд Open-Meteo понимал, какой сервис запрашивают.
+
+    Важно: геокодинг (geocoding-api.open-meteo.com) живёт на других
+    серверах — на fallback-IP его подменять нельзя, поэтому
+    подменяется только FORECAST_URL.
+    """
+    hosts = config.get("open_meteo_fallback_hosts") or []
+    if not isinstance(hosts, list):
+        return
+    hosts = [str(h).strip().rstrip("/") for h in hosts if str(h).strip()]
+    if not hosts:
+        return
+    global FORECAST_URL, OPEN_METEO_FALLBACK_HOSTS, OPEN_METEO_API_HOST
+    OPEN_METEO_FALLBACK_HOSTS = hosts
+    OPEN_METEO_API_HOST = "api.open-meteo.com"
+    parsed = urllib.parse.urlparse(FORECAST_URL)
+    # Заменяем хост в FORECAST_URL на первый из списка. При неудаче запроса
+    # _candidate_urls перебирает остальные адреса из OPEN_METEO_FALLBACK_HOSTS.
+    first = hosts[0]
+    netloc = first if (":" in first) else (
+        "[%s]" % first if ":" in first else first)
+    FORECAST_URL = urllib.parse.urlunparse(
+        parsed._replace(netloc=netloc))
+    print("upstream: Open-Meteo forecast через fallback-хосты: %s"
+          % ", ".join(hosts), flush=True)
+
+
 USER_AGENT = "weather-proxy/1.0"
 
 WEATHER_CODES = {
@@ -627,6 +669,7 @@ class WeatherService:
     def __init__(self):
         self.config = self._load_config()
         apply_open_meteo_scheme(self.config)
+        apply_open_meteo_hosts(self.config)
         if self.config.get("open_meteo_http"):
             # http-фронтенд Open-Meteo не тянет большие пакетные ответы:
             # запросы с hourly сразу на несколько городов виснут или отдают
@@ -800,6 +843,77 @@ class WeatherService:
         return int(self.config.get("cache_ttl", 1800))
 
     # ---- HTTP helpers ---------------------------------------------------
+    def _candidate_urls(self, url):
+        """URL + те же запросы на fallback-хостах (если настроены).
+
+        Применимо только к URL с API-хостом Open-Meteo (в т.ч. уже
+        подменённым на fallback). Геокодинг и прочие хосты не трогаем.
+        """
+        hosts = OPEN_METEO_FALLBACK_HOSTS
+        if not hosts:
+            return [url]
+        parsed = urllib.parse.urlparse(url)
+        if parsed.hostname not in [OPEN_METEO_API_HOST] + [
+                urllib.parse.urlparse("//" + h).hostname for h in hosts]:
+            return [url]
+        out = []
+        seen = set()
+        current = parsed.netloc
+        # Сначала текущий хост, затем остальные fallback-адреса по порядку.
+        ordered = [current] + [h for h in hosts if h != current]
+        for host in ordered:
+            if host in seen:
+                continue
+            seen.add(host)
+            out.append(urllib.parse.urlunparse(parsed._replace(netloc=host)))
+        return out
+
+    def _upstream_headers(self, url, extra=None):
+        """Заголовки для запроса к Open-Meteo.
+
+        Если URL указывает на fallback-IP/хост (а не на штатный
+        api.open-meteo.com), добавляем заголовок Host с оригинальным
+        именем — без него бэкенд Open-Meteo не поймёт, какой сервис
+        запрашивают, и вернёт 400/пустоту.
+        """
+        hdrs = {
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+        }
+        parsed = urllib.parse.urlparse(url)
+        if (OPEN_METEO_FALLBACK_HOSTS
+                and parsed.hostname != OPEN_METEO_API_HOST
+                and parsed.hostname in [
+                    urllib.parse.urlparse("//" + h).hostname
+                    for h in OPEN_METEO_FALLBACK_HOSTS]):
+            hdrs["Host"] = OPEN_METEO_API_HOST
+        if extra:
+            hdrs.update(extra)
+        return hdrs
+
+    def _fetch_with_fallback(self, url, timeout=None, headers=None,
+                             attempts=None, retry_delay=1.5):
+        """GET с перебором fallback-хостов (если они настроены).
+
+        На каждый хост — attempts попыток (логика ретраев та же, что в
+        _get_json). Возвращаем первый валидный ответ. Ошибка — OpenMeteoError
+        с описанием последней неудачи (как раньше).
+        """
+        urls = self._candidate_urls(url)
+        err = OpenMeteoError("Open-Meteo error")
+        for i, candidate in enumerate(urls):
+            try:
+                return self._get_json(
+                    candidate, timeout=timeout,
+                    headers=self._upstream_headers(candidate, headers),
+                    attempts=attempts, retry_delay=retry_delay)
+            except OpenMeteoError as e:
+                err = e
+                if i < len(urls) - 1:
+                    print("upstream: %s недоступен (%s), пробуем следующий"
+                          % (candidate.split("?")[0], e), flush=True)
+        raise err
+
     def _get_json(self, url, timeout=None, headers=None, attempts=None, retry_delay=1.5):
         # Значения по умолчанию берём из конфига: при недоступном источнике
         # важно не держать страницу долго (10 с × 3 попытки = 35 с простоя).
@@ -837,6 +951,21 @@ class WeatherService:
             time.sleep(retry_delay * attempt)
         raise OpenMeteoError("Open-Meteo error")
 
+    # Валидация ответа Open-Meteo: некоторые бэкенды (air-quality, marine)
+    # отвечают 200, но с пустыми данными (temperature_2m: null).
+    # Такой ответ — это не данные, и в кэш его класть нельзя.
+    @staticmethod
+    def _is_valid_weather(data):
+        if not isinstance(data, dict) or data.get("error"):
+            return False
+        current = data.get("current") or {}
+        if current.get("temperature_2m") is None:
+            return False
+        daily = data.get("daily") or {}
+        if not daily.get("time"):
+            return False
+        return True
+
     # ---- Open-Meteo -----------------------------------------------------
     def fetch_open_meteo(self, city):
         params = {
@@ -850,9 +979,9 @@ class WeatherService:
             "timezone": "auto",
         }
         url = FORECAST_URL + "?" + urllib.parse.urlencode(params)
-        data = self._get_json(url)
-        if data.get("error"):
-            raise OpenMeteoError(data.get("reason", "Open-Meteo error"))
+        data = self._fetch_with_fallback(url)
+        if not self._is_valid_weather(data):
+            raise OpenMeteoError("Open-Meteo: некорректный/пустой ответ прогноза")
         return data
 
     def fetch_open_meteo_batch(self, cities):
@@ -872,10 +1001,10 @@ class WeatherService:
             "timezone": "auto",
         }
         url = FORECAST_URL + "?" + urllib.parse.urlencode(params)
-        data = self._get_json(url)
+        data = self._fetch_with_fallback(url)
         if isinstance(data, dict):
-            if data.get("error"):
-                raise OpenMeteoError(data.get("reason", "Open-Meteo error"))
+            if not self._is_valid_weather(data):
+                raise OpenMeteoError("Open-Meteo: некорректный/пустой ответ прогноза")
             data = [data]
         return data
 
@@ -1362,7 +1491,7 @@ class WeatherService:
         }
         url = FORECAST_URL + "?" + urllib.parse.urlencode(params)
         try:
-            data = self._get_json(url)
+            data = self._fetch_with_fallback(url)
         except OpenMeteoError:
             return ""
         return data.get("timezone") or ""
