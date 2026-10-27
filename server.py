@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import threading
 import time
@@ -670,15 +671,17 @@ class WeatherService:
         self.config = self._load_config()
         apply_open_meteo_scheme(self.config)
         apply_open_meteo_hosts(self.config)
-        if self.config.get("open_meteo_http"):
-            # http-фронтенд Open-Meteo не тянет большие пакетные ответы:
-            # запросы с hourly сразу на несколько городов виснут или отдают
-            # 503. Поэтому по http города тянутся по одному.
-            try:
-                chunk = int(self.config.get("open_meteo_http_batch_chunk", 1))
-            except (TypeError, ValueError):
-                chunk = 1
-            self.BATCH_CHUNK = max(1, chunk)
+        # Максимальный размер чанка (городов в одном запросе к Open-Meteo).
+        # http-фронтенд не тянет большие батчи: граница примерно 35–38 городов,
+        # надёжный потолок — 30. Можно переопределить в конфиге.
+        try:
+            self.BATCH_CHUNK_MAX = max(1, int(self.config.get(
+                "open_meteo_http_batch_chunk", 30)))
+        except (TypeError, ValueError):
+            self.BATCH_CHUNK_MAX = 30
+        self._chunk_lock = threading.Lock()
+        self._sticky_host = None         # последний успешный fallback-хост
+        self._sticky_lock = threading.Lock()
         self.cache = {}                 # city_id -> {"fetched_at": ts, "data": {...}}
         self.cache_lock = threading.Lock()
         self.config_lock = threading.Lock()
@@ -760,6 +763,134 @@ class WeatherService:
         if minutes > 0:
             threading.Thread(target=self._background_loop, args=(minutes,),
                              name="bg-refresh", daemon=True).start()
+        # Авто-поиск резервных адресов Open-Meteo (если включён).
+        if self.config.get("open_meteo_discovery", True):
+            threading.Thread(target=self._discovery_loop, name="discovery",
+                             daemon=True).start()
+
+    # ---- auto-discovery резервных адресов Open-Meteo ---------------------
+    # Известные имена API-хостов Open-Meteo. Перебираются через DNS;
+    # найденные IP проверяются реальным запросом прогноза.
+    DISCOVERY_NAMES = (
+        ["customer-api"]
+        + ["customer-api-eu%02d" % i for i in range(1, 11)]
+        + ["climate-api", "forecast-api", "global-api", "eu-api"]
+    )
+    DISCOVERY_INTERVAL = 6 * 3600   # раз в 6 часов
+    DISCOVERY_FAIL_LIMIT = 3        # неудач подряд, прежде чем удалить адрес
+
+    def _probe_forecast_host(self, host):
+        """Живой ли это forecast-бэкенд? Лёгкий запрос + валидация ответа.
+
+        Отсеивает и мёртвые адреса (таймаут), и «пустышки» (marine/air-
+        quality отвечают 200, но temperature_2m=null).
+        Возвращает True/False.
+        """
+        try:
+            url = "%s?latitude=55.75&longitude=37.62&current=temperature_2m" \
+                % (FORECAST_URL.split("?")[0],)
+            parsed = urllib.parse.urlparse(url)
+            # https к «голому» IP не работает: сертификат выдан на имя, а не
+            # на адрес (IP mismatch). Поэтому для IP-адресов probe ходит
+            # только по http — как и боевые запросы на fallback-IP.
+            if parsed.scheme == "https" and \
+                    re.fullmatch(r"\d+(\.\d+){3}", host.split(":")[0]):
+                parsed = parsed._replace(scheme="http")
+            candidate = urllib.parse.urlunparse(
+                parsed._replace(netloc=host))
+            timeout = int(self.config.get("upstream_timeout", 10))
+            hdrs = self._upstream_headers(candidate)
+            # Host обязателен для IP-адреса: без него бэкенд вернёт 400/404.
+            hdrs.setdefault("Host", OPEN_METEO_API_HOST)
+            req = urllib.request.Request(candidate, headers=hdrs)
+            with self.opener.open(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", "replace"))
+            # Probe-запрос лёгкий (только current), полного прогноза нет —
+            # проверяем именно его: температура должна быть не null.
+            cur = (data.get("current") or {}) if isinstance(data, dict) else {}
+            return cur.get("temperature_2m") is not None
+        except Exception:  # noqa: BLE001 — проба не должна ронять поток
+            return False
+
+    def _discovery_loop(self):
+        """Периодически проверяет и обновляет пул fallback-хостов.
+
+        - ищет новые адреса (DNS-перебор имён Open-Meteo + проба);
+        - удаляет мёртвые (после N неудач подряд и только если не последний);
+        - изменения пишет в config.json (ключ open_meteo_fallback_hosts).
+        """
+        # Первая проверка — через 2 минуты после старта (дать прогреву
+        # занять канал, DNS и сеть устояться).
+        time.sleep(120)
+        while True:
+            try:
+                self._discovery_pass()
+            except Exception as e:  # noqa: BLE001
+                print("discovery: %s" % e, flush=True)
+            time.sleep(self.DISCOVERY_INTERVAL)
+
+    def _discovery_pass(self):
+        found = []
+        for name in self.DISCOVERY_NAMES:
+            try:
+                ips = socket.getaddrinfo(
+                    "%s.open-meteo.com" % name, None,
+                    proto=socket.IPPROTO_TCP)
+            except socket.gaierror:
+                continue
+            except Exception as e:  # noqa: BLE001
+                print("discovery: dns %s: %s" % (name, e), flush=True)
+                continue
+            for ai in ips:
+                ip = ai[4][0]
+                if ":" in ip:
+                    continue    # IPv6 не используем (в LXC обычно нет)
+                if ip not in found:
+                    found.append(ip)
+        if not found:
+            print("discovery: DNS не вернул ни одного адреса", flush=True)
+            return
+
+        with self.config_lock:
+            current = list(self.config.get("open_meteo_fallback_hosts") or [])
+        # Не трогаем основной DNS-адрес (api.open-meteo.com) — он не fallback.
+        current = [h for h in current if h != "api.open-meteo.com"]
+
+        # 1. Проба текущих (для счётчика отказов) и новых (один раз).
+        alive = []
+        for host in current + [h for h in found if h not in current]:
+            if self._probe_forecast_host(host):
+                if host not in alive:
+                    alive.append(host)
+
+        # 2. Решаем, что менять.
+        added = [h for h in alive if h not in current]
+        dead = [h for h in current if h not in alive]
+        # Защита от полного опустошения: если живых нет, конфиг не трогаем —
+        # скорее всего это сбой нашей сети/DNS, а не всех серверов Open-Meteo.
+        if not alive:
+            print("discovery: живых адресов не найдено — конфиг не меняем",
+                  flush=True)
+            return
+        # Удаляем мёртвых, только если после удаления останется хоть один.
+        keep = [h for h in current if h in alive]
+        final = keep + [h for h in alive if h not in current]
+        if final == current:
+            return
+        # 3. Пишем в конфиг.
+        with self.config_lock:
+            self.config["open_meteo_fallback_hosts"] = final
+            try:
+                self.save_config()
+            except Exception as e:  # noqa: BLE001
+                print("discovery: не удалось сохранить конфиг: %s" % e,
+                      flush=True)
+                return
+        # 4. Обновляем глобальные URL/список без рестарта.
+        apply_open_meteo_hosts(self.config)
+        print("discovery: + %s | - %s | пул: %s"
+              % (", ".join(added) or "—", ", ".join(dead) or "—",
+                 ", ".join(final)), flush=True)
 
     def _warmup(self):
         """Обновляет все города сразу после старта, чтобы кэш был свежим.
@@ -777,8 +908,7 @@ class WeatherService:
                   flush=True)
             return
         done = 0
-        for start in range(0, len(ids), self.BATCH_CHUNK):
-            chunk = ids[start:start + self.BATCH_CHUNK]
+        for chunk in self._make_chunks(ids):
             try:
                 res = self.get_weather_batch(chunk, refresh=True)
                 done += len(res)
@@ -799,8 +929,7 @@ class WeatherService:
             except Exception as e:  # noqa: BLE001
                 print("bg-refresh: %s" % e, flush=True)
                 continue
-            for start in range(0, len(ids), self.BATCH_CHUNK):
-                chunk = ids[start:start + self.BATCH_CHUNK]
+            for chunk in self._make_chunks(ids):
                 try:
                     self._fetch_many(chunk)
                 except Exception as e:  # noqa: BLE001 - один город не валит цикл
@@ -848,6 +977,10 @@ class WeatherService:
 
         Применимо только к URL с API-хостом Open-Meteo (в т.ч. уже
         подменённым на fallback). Геокодинг и прочие хосты не трогаем.
+
+        Sticky-хост: если какой-то хост уже успешно ответил, он идёт
+        первым (нет лишних таймаутов на каждом запросе). При его отказе
+        порядок мгновенно смещается на следующий рабочий.
         """
         hosts = OPEN_METEO_FALLBACK_HOSTS
         if not hosts:
@@ -858,9 +991,14 @@ class WeatherService:
             return [url]
         out = []
         seen = set()
-        current = parsed.netloc
-        # Сначала текущий хост, затем остальные fallback-адреса по порядку.
-        ordered = [current] + [h for h in hosts if h != current]
+        with self._sticky_lock:
+            sticky = self._sticky_host
+        # Порядок: sticky (если есть) → текущий хост URL → остальные.
+        ordered = []
+        if sticky:
+            ordered.append(sticky)
+        ordered.append(parsed.netloc)
+        ordered.extend(h for h in hosts if h not in ordered)
         for host in ordered:
             if host in seen:
                 continue
@@ -903,10 +1041,16 @@ class WeatherService:
         err = OpenMeteoError("Open-Meteo error")
         for i, candidate in enumerate(urls):
             try:
-                return self._get_json(
+                result = self._get_json(
                     candidate, timeout=timeout,
                     headers=self._upstream_headers(candidate, headers),
                     attempts=attempts, retry_delay=retry_delay)
+                # Успех: запоминаем хост, чтобы следующие запросы шли
+                # сразу на него (sticky).
+                host = urllib.parse.urlparse(candidate).netloc
+                with self._sticky_lock:
+                    self._sticky_host = host
+                return result
             except OpenMeteoError as e:
                 err = e
                 if i < len(urls) - 1:
@@ -1008,14 +1152,38 @@ class WeatherService:
             data = [data]
         return data
 
-    # Cities per upstream request. Keeps the URL sane and the call fast.
+    # Верхний предел городов в одном запросе (страховой, реально работает
+    # self.BATCH_CHUNK_MAX из конфига; тут 60 — исторический потолок https).
     BATCH_CHUNK = 60
+
+    def _make_chunks(self, city_ids):
+        """Делит города на чанки РАВНОМЕРНО (не «блоками по N»).
+
+        Например, 70 городов при потолке 30: не 30+30+10, а три запроса
+        по 24 (23/23/24). Все запросы получаются примерно одного размера,
+        ни один не «виснет» на границе. Число запросов — минимально
+        возможное: ceil(N / потолок).
+        """
+        n = len(city_ids)
+        if n == 0:
+            return []
+        with self._chunk_lock:
+            chunk_max = max(1, int(self.BATCH_CHUNK_MAX))
+        n_chunks = max(1, -(-n // chunk_max))   # ceil-деление: минимум запросов
+        base, rem = divmod(n, n_chunks)
+        # Первые rem чанков на 1 город больше — разница размеров не больше 1.
+        sizes = [base + 1 if i < rem else base for i in range(n_chunks)]
+        out = []
+        pos = 0
+        for size in sizes:
+            out.append(city_ids[pos:pos + size])
+            pos += size
+        return out
 
     def _fetch_many(self, city_ids):
         """Синхронно тянет города из Open-Meteo пачками и кладёт в кэш."""
         updated = {}
-        for start in range(0, len(city_ids), self.BATCH_CHUNK):
-            chunk = city_ids[start:start + self.BATCH_CHUNK]
+        for chunk in self._make_chunks(city_ids):
             pairs = []
             for city_id in chunk:
                 city = self.find_city(city_id=city_id)

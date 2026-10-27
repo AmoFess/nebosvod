@@ -1,12 +1,14 @@
 {
   "port": 8080,
-  "cache_ttl": 1200,
+  "cache_ttl": 1800,
   "warmup_on_start": true,
-  "background_refresh_minutes": 20,
+  "background_refresh_minutes": 30,
   "upstream_timeout": 10,
   "upstream_attempts": 2,
   "open_meteo_http": false,
+  "open_meteo_http_batch_chunk": 30,
   "open_meteo_fallback_hosts": [],
+  "open_meteo_discovery": true,
   "locations": [
     {
       "id": 524901,
