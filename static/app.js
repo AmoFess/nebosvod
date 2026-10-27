@@ -396,9 +396,11 @@
 
     var emoji = weatherEmoji(c.weather_code, c.condition);
 
-    return '<h2>' + esc(data.name || city.name) + '</h2>' +
+    return '<div class="modal-header">' +
       '<div class="modal-emoji">' + emoji + '</div>' +
-      (metaHtml || "") +
+      '<h2>' + esc(data.name || city.name) + '</h2>' +
+      (metaHtml || '') +
+    '</div>' +
 
       '<div class="section">' +
         '<h3>Сейчас</h3>' +
@@ -439,10 +441,14 @@
     var data = weatherByCity[city.id];
     if (!data) return;
 
+    var tzRu = data.tz_ru || data.timezone || "";
     var metaHtml =
-      '<div class="meta">ID города: <a href="#" class="copy-id" title="Скопировать ссылку API">' +
-      esc(data.city_id) + '</a><br>' +
-      'Часовой пояс: <strong>' + esc(data.timezone || "—") + '</strong></div>';
+      '<div class="meta">' +
+        '<div class="meta-tz-ru"><strong>' + esc(tzRu) + '</strong></div>' +
+        '<div class="meta-tz">' + esc(data.timezone || "—") + '</div>' +
+        '<div class="meta-id">ID города: <a href="#" class="copy-id" title="Скопировать ссылку API">' +
+          esc(data.city_id) + '</a></div>' +
+      '</div>';
 
     els.modalBody.innerHTML = fullCardHTML(city, data, metaHtml);
     var idLink = els.modalBody.querySelector(".copy-id");

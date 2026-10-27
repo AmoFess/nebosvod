@@ -660,6 +660,238 @@ def hhmm(value):
     return s[:5]
 
 
+# Русские названия часовых поясов (canonical-зоны IANA → город-центр зоны).
+# Полная таблица: Россия (все 11 зон), СНГ, Европа, Азия, Америка, Африка, Океания.
+# Устаревшие синонимы IANA (см. TZ_ALIASES) мапятся на canonical перед поиском.
+TIMEZONE_RU = {
+    # --- Россия (все часовые зоны) ---
+    "Europe/Kaliningrad": "Калининград",
+    "Europe/Moscow": "Москва",
+    "Europe/Samara": "Самара",
+    "Asia/Yekaterinburg": "Екатеринбург",
+    "Asia/Omsk": "Омск",
+    "Asia/Krasnoyarsk": "Красноярск",
+    "Asia/Novosibirsk": "Новосибирск",
+    "Asia/Novokuznetsk": "Новокузнецк",
+    "Asia/Irkutsk": "Иркутск",
+    "Asia/Yakutsk": "Якутск",
+    "Asia/Vladivostok": "Владивосток",
+    "Asia/Magadan": "Магадан",
+    "Asia/Sakhalin": "Южно-Сахалинск",
+    "Asia/Kamchatka": "Петропавловск-Камчатский",
+    "Asia/Anadyr": "Анадырь",
+    # --- СНГ и ближнее зарубежье ---
+    "Europe/Simferopol": "Симферополь",
+    "Europe/Kyiv": "Киев",
+    "Europe/Kiev": "Киев",
+    "Europe/Minsk": "Минск",
+    "Europe/Riga": "Рига",
+    "Europe/Vilnius": "Вильнюс",
+    "Europe/Tallinn": "Таллин",
+    "Europe/Chisinau": "Кишинёв",
+    "Europe/Tiraspol": "Тирасполь",
+    "Europe/Tbilisi": "Тбилиси",
+    "Europe/Yerevan": "Ереван",
+    "Europe/Baku": "Баку",
+    "Asia/Tashkent": "Ташкент",
+    "Asia/Almaty": "Алматы",
+    "Asia/Aqtobe": "Актобе",
+    "Asia/Aqtau": "Актау",
+    "Asia/Atyrau": "Атырау",
+    "Asia/Oral": "Уральск",
+    "Asia/Bishkek": "Бишкек",
+    "Asia/Dushanbe": "Душанбе",
+    "Asia/Ashgabat": "Ашхабад",
+    "Asia/Baku": "Баку",
+    "Asia/Yerevan": "Ереван",
+    "Asia/Tbilisi": "Тбилиси",
+    # --- Европа ---
+    "Europe/London": "Лондон",
+    "Europe/Dublin": "Дублин",
+    "Europe/Lisbon": "Лиссабон",
+    "Europe/Madrid": "Мадрид",
+    "Europe/Paris": "Париж",
+    "Europe/Brussels": "Брюссель",
+    "Europe/Amsterdam": "Амстердам",
+    "Europe/Berlin": "Берлин",
+    "Europe/Zurich": "Цюрих",
+    "Europe/Vienna": "Вена",
+    "Europe/Prague": "Прага",
+    "Europe/Warsaw": "Варшава",
+    "Europe/Budapest": "Будапешт",
+    "Europe/Bucharest": "Бухарест",
+    "Europe/Sofia": "София",
+    "Europe/Belgrade": "Белград",
+    "Europe/Zagreb": "Загреб",
+    "Europe/Sarajevo": "Сараево",
+    "Europe/Skopje": "Скопье",
+    "Europe/Tirane": "Тирана",
+    "Europe/Athens": "Афины",
+    "Europe/Rome": "Рим",
+    "Europe/Malta": "Мальта",
+    "Europe/Copenhagen": "Копенгаген",
+    "Europe/Stockholm": "Стокгольм",
+    "Europe/Oslo": "Осло",
+    "Europe/Helsinki": "Хельсинки",
+    "Europe/Istanbul": "Стамбул",
+    "Europe/Bucharest_": "Бухарест",
+    # --- Азия ---
+    "Asia/Baghdad": "Багдад",
+    "Asia/Tehran": "Тегеран",
+    "Asia/Dubai": "Дубай",
+    "Asia/Qatar": "Доха",
+    "Asia/Kuwait": "Кувейт",
+    "Asia/Riyadh": "Рияд",
+    "Asia/Jerusalem": "Иерусалим",
+    "Asia/Amman": "Амман",
+    "Asia/Beirut": "Бейрут",
+    "Asia/Damascus": "Дамаск",
+    "Asia/Almaty_": "Алматы",
+    "Asia/Karachi": "Карачи",
+    "Asia/Kolkata": "Калькутта",
+    "Asia/Calcutta": "Калькутта",
+    "Asia/Dhaka": "Дакка",
+    "Asia/Kathmandu": "Катманду",
+    "Asia/Colombo": "Коломбо",
+    "Asia/Yangon": "Янгон",
+    "Asia/Bangkok": "Бангкок",
+    "Asia/Phnom_Penh": "Пномпень",
+    "Asia/Vientiane": "Вьентьян",
+    "Asia/Ho_Chi_Minh": "Хошимин",
+    "Asia/Saigon": "Хошимин",
+    "Asia/Hanoi": "Ханой",
+    "Asia/Kuala_Lumpur": "Куала-Лумпур",
+    "Asia/Singapore": "Сингапур",
+    "Asia/Jakarta": "Джакарта",
+    "Asia/Makassar": "Макассар",
+    "Asia/Manila": "Манила",
+    "Asia/Shanghai": "Пекин",
+    "Asia/Chongqing": "Чунцин",
+    "Asia/Hong_Kong": "Гонконг",
+    "Asia/Macau": "Макао",
+    "Asia/Taipei": "Тайбэй",
+    "Asia/Seoul": "Сеул",
+    "Asia/Pyongyang": "Пхеньян",
+    "Asia/Tokyo": "Токио",
+    "Asia/Ulaanbaatar": "Улан-Батор",
+    "Asia/Ulan_Bator": "Улан-Батор",
+    # --- Америка ---
+    "America/New_York": "Нью-Йорк",
+    "America/Detroit": "Детройт",
+    "America/Toronto": "Торонто",
+    "America/Montreal": "Монреаль",
+    "America/Chicago": "Чикаго",
+    "America/Winnipeg": "Виннипег",
+    "America/Mexico_City": "Мехико",
+    "America/Denver": "Денвер",
+    "America/Edmonton": "Эдмонтон",
+    "America/Phoenix": "Финикс",
+    "America/Los_Angeles": "Лос-Анджелес",
+    "America/Vancouver": "Ванкувер",
+    "America/Anchorage": "Анкоридж",
+    "America/Halifax": "Галифакс",
+    "America/St_Johns": "Сент-Джонс",
+    "America/Guatemala": "Гватемала",
+    "America/San_Salvador": "Сан-Сальвадор",
+    "America/Havana": "Гавана",
+    "America/Jamaica": "Кингстон",
+    "America/Panama": "Панама",
+    "America/Bogota": "Богота",
+    "America/Caracas": "Каракас",
+    "America/Quito": "Кито",
+    "America/Lima": "Лима",
+    "America/La_Paz": "Ла-Пас",
+    "America/Santiago": "Сантьяго",
+    "America/Asuncion": "Асунсьон",
+    "America/Montevideo": "Монтевидео",
+    "America/Buenos_Aires": "Буэнос-Айрес",
+    "America/Sao_Paulo": "Сан-Паулу",
+    "America/Recife": "Ресифи",
+    "America/Fortaleza": "Форталеза",
+    "America/Salvador": "Салвадор",
+    "America/Manaus": "Манаус",
+    "America/Brasilia": "Бразилиа",
+    # --- Африка ---
+    "Africa/Cairo": "Каир",
+    "Africa/Tripoli": "Триполи",
+    "Africa/Tunis": "Тунис",
+    "Africa/Algiers": "Алжир",
+    "Africa/Casablanca": "Касабланка",
+    "Africa/Lagos": "Лагос",
+    "Africa/Accra": "Аккра",
+    "Africa/Nairobi": "Найроби",
+    "Africa/Addis_Ababa": "Аддис-Абеба",
+    "Africa/Dar_es_Salaam": "Дар-эс-Салам",
+    "Africa/Kampala": "Кампала",
+    "Africa/Kinshasa": "Киншаса",
+    "Africa/Luanda": "Луанда",
+    "Africa/Harare": "Хараре",
+    "Africa/Lusaka": "Лусака",
+    "Africa/Maputo": "Мапуту",
+    "Africa/Johannesburg": "Йоханнесбург",
+    "Africa/Windhoek": "Виндхук",
+    # --- Австралия и Океания ---
+    "Australia/Perth": "Перт",
+    "Australia/Adelaide": "Аделаида",
+    "Australia/Darwin": "Дарвин",
+    "Australia/Brisbane": "Брисбен",
+    "Australia/Sydney": "Сидней",
+    "Australia/Melbourne": "Мельбурн",
+    "Australia/Hobart": "Хобарт",
+    "Pacific/Auckland": "Окленд",
+    "Pacific/Fiji": "Сува",
+    "Pacific/Honolulu": "Гонолулу",
+    "Pacific/Guam": "Хагатня",
+    "Pacific/Port_Moresby": "Порт-Морсби",
+}
+
+# Псевдонимы IANA, которых нет в таблице, но известны их canonical-замены
+# (полный список синонимов велик; здесь — часто встречающиеся в геокодинге).
+TZ_ALIASES = {
+    "Asia/Calcutta": "Asia/Kolkata",
+    "Asia/Saigon": "Asia/Ho_Chi_Minh",
+    "Asia/Ulan_Bator": "Asia/Ulaanbaatar",
+    "Europe/Kiev": "Europe/Kyiv",
+    "Asia/Katmandu": "Asia/Kathmandu",
+}
+
+
+def timezone_ru_display(tz, utc_offset_seconds=None):
+    """Строка для шапки модалки: «Москва (UTC+3)», «Лондон (UTC+1)».
+    Неизвестная зона → исходный код («Europe/Paris (UTC+2)»); без смещения —
+    только название или код."""
+    off = format_utc_offset(utc_offset_seconds)
+    ru = timezone_ru_name(tz)
+    if ru:
+        return "%s (%s)" % (ru, off) if off else ru
+    if tz:
+        return "%s (%s)" % (tz, off) if off else tz
+    return off or ""
+
+
+def timezone_ru_name(tz):
+    """Русское название города-центра часовой зоны («Москва», «Пекин») или None."""
+    if not tz:
+        return None
+    tz = TZ_ALIASES.get(tz, tz)
+    return TIMEZONE_RU.get(tz)
+
+
+def format_utc_offset(seconds):
+    """Смещение в человекочитаемый вид: 10800 → «UTC+3», -12600 → «UTC-3:30».
+    None/пустое значение — неизвестно, возвращаем пустую строку."""
+    if seconds is None:
+        return ""
+    try:
+        off = int(seconds)
+    except (TypeError, ValueError):
+        return ""
+    sign = "+" if off >= 0 else "-"
+    off = abs(off)
+    h, m = off // 3600, (off % 3600) // 60
+    return "UTC%s%d%s" % (sign, h, (":%02d" % m) if m else "")
+
+
 def fmt_updated_at(utc_offset_seconds):
     """ISO-8601 with the city's UTC offset, e.g. 2026-08-14T15:30:00+05:00."""
     off = int(utc_offset_seconds or 0)
@@ -1388,6 +1620,9 @@ class WeatherService:
             "city_id": int(city["id"]),
             "name": city.get("name", ""),
             "timezone": city.get("timezone") or om.get("timezone") or "",
+            "utc_offset_seconds": int(utc_off or 0),
+            "tz_ru": timezone_ru_display(
+                city.get("timezone") or om.get("timezone") or "", utc_off),
             "updated_at": fmt_updated_at(utc_off),
             "current": {
                 "temperature": round_int(current.get("temperature_2m")),

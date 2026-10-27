@@ -729,18 +729,13 @@ main {
 }
 
 /* ---- full card (режим «Полностью») ---------------------------------- */
-.card-full h2 {
+/* Шапка та же трёхчастная, но без правого блока (metaHtml пуст).
+   Иконка и название слева, по центру высоты. */
+.card-full .modal-header h2 {
   color: var(--heading);
   font-size: 26px;
-  text-align: center;
-  margin: 0 0 4px;
-}
-
-.card-full .modal-emoji {
-  font-size: 52px;
-  line-height: 1.2;
-  margin: 4px 0 8px;
-  text-align: center;
+  text-align: left;
+  margin: 0;
 }
 
 .card-full .section {
@@ -894,18 +889,46 @@ main {
 
 .modal-close:hover { background: var(--selection); }
 
-.modal h2 {
-  color: var(--heading);
-  font-size: 26px;
-  text-align: center;
-  margin: 0 0 4px;
+/* Шапка модалки: иконка | название | пояс+ID.
+   Иконка и название — слева, по центру высоты; правый блок — вправо. */
+.modal-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
-.modal-emoji {
+.modal-header .modal-emoji {
   font-size: 52px;
   line-height: 1.2;
-  margin: 4px 0 8px;
-  text-align: center;
+  margin: 0;
+  flex-shrink: 0;
+  text-align: left;
+}
+
+.modal-header h2 {
+  text-align: left;
+  font-size: 30px;
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.modal-header .meta {
+  margin: 0;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.modal-header .meta-tz-ru strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.modal-header .meta-tz {
+  color: var(--dim);
+  font-size: 14px;
 }
 
 .modal .meta { color: var(--dim); font-size: 16px; margin-bottom: 14px; }
@@ -1036,17 +1059,27 @@ main {
     overflow: hidden;
   }
   /* Компактный прогноз на телефоне: меньше шапка и плотнее блоки. */
-  .modal-content:not(.sett-modal):not(.single) h2 {
+  /* Шапка модалки на телефоне: упрощённая раскладка.
+     Иконка и название в строке, блок пояса/ID — строкой ниже. */
+  .modal-content:not(.sett-modal):not(.single) .modal-header {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+  .modal-content:not(.sett-modal):not(.single) .modal-header h2 {
     font-size: 20px;
-    margin-bottom: 2px;
+    margin: 0;
+    flex: 1;
+    min-width: 0;
   }
-  .modal-content:not(.sett-modal):not(.single) .modal-emoji {
+  .modal-content:not(.sett-modal):not(.single) .modal-header .modal-emoji {
     font-size: 38px;
-    margin: 2px 0 4px;
+    margin: 0;
   }
-  .modal-content:not(.sett-modal):not(.single) .meta {
+  .modal-content:not(.sett-modal):not(.single) .modal-header .meta {
     font-size: 14px;
-    margin-bottom: 10px;
+    margin: 0;
+    width: 100%;
+    text-align: left;
   }
   .modal-content:not(.sett-modal):not(.single) .section {
     padding: 10px 12px;
@@ -1089,8 +1122,9 @@ main {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 14px;
-    align-items: start;
+    align-items: stretch;   /* плитки «Сейчас/Сегодня/Ночь» одной высоты */
   }
+  .modal-body .modal-header,
   .modal-body .modal-emoji,
   .modal-body h2,
   .modal-body .meta,
