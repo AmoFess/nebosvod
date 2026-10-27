@@ -759,7 +759,7 @@ class WeatherService:
         if self.config.get("warmup_on_start", True):
             threading.Thread(target=self._warmup, name="warmup",
                              daemon=True).start()
-        minutes = int(self.config.get("background_refresh_minutes", 20) or 0)
+        minutes = self.background_refresh_minutes
         if minutes > 0:
             threading.Thread(target=self._background_loop, args=(minutes,),
                              name="bg-refresh", daemon=True).start()
@@ -970,6 +970,13 @@ class WeatherService:
     @property
     def cache_ttl(self):
         return int(self.config.get("cache_ttl", 1800))
+
+    @property
+    def background_refresh_minutes(self):
+        try:
+            return max(0, int(self.config.get("background_refresh_minutes", 20) or 0))
+        except (TypeError, ValueError):
+            return 20
 
     # ---- HTTP helpers ---------------------------------------------------
     def _candidate_urls(self, url):
@@ -1872,6 +1879,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_cities()
         elif path == "/api/all-cities":
             self.handle_all_cities()
+        elif path == "/api/config":
+            self.handle_config()
         elif path == "/api/me":
             self.handle_me()
         elif path == "/api/weather":
@@ -1908,6 +1917,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_all_cities(self):
         self.send_json(200, {"cities": self.service.get_locations()})
+
+    def handle_config(self):
+        """Публичные настройки сервиса для фронтенда.
+
+        Интервал автообновления клиент берёт отсюда — чтобы не
+        рассинхронизироватьc с серверным фоном при смене конфига.
+        """
+        self.send_json(200, {
+            "background_refresh_minutes": self.service.background_refresh_minutes,
+            "cache_ttl": self.service.cache_ttl,
+        })
 
     def handle_me(self):
         user = self.current_user()

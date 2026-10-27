@@ -2,7 +2,8 @@
 (function () {
   "use strict";
 
-  var AUTO_REFRESH_MS = 20 * 60 * 1000; // 20 минут
+  var AUTO_REFRESH_MS_FALLBACK = 30 * 60 * 1000; // если сервер не отдал настройку
+  var autoRefreshMs = AUTO_REFRESH_MS_FALLBACK; // уточняется из /api/config
 
   var cities = [];           // [{id,name,alias,latitude,longitude,timezone}]
   var weatherByCity = {};    // city_id -> weather data
@@ -231,7 +232,7 @@
       setStatus("");
       return;
     }
-    var remaining = AUTO_REFRESH_MS - (Date.now() - lastUpdatedAt);
+    var remaining = autoRefreshMs - (Date.now() - lastUpdatedAt);
     var tail = remaining <= 0 ? "обновление…" : fmtCountdown(remaining);
     setStatusDonate(
       "Обновлено: " + fmtClock(lastUpdatedAt) + " · следующее обновление " + tail,
@@ -508,6 +509,17 @@
   }
 
   // ---- data loading ----------------------------------------------------
+  function loadConfig() {
+    // Интервал автообновления берём с сервера — чтобы клиент не
+    // рассинхронизировался с серверным фоновым обновлением.
+    return api("/api/config").then(function (data) {
+      var minutes = parseInt(data.background_refresh_minutes, 10);
+      if (minutes > 0) {
+        autoRefreshMs = minutes * 60 * 1000;
+      }
+    }).catch(function () { /* останется fallback */ });
+  }
+
   function loadCities() {
     return api("/api/cities").then(function (data) {
       cities = data.cities || [];
@@ -1149,13 +1161,14 @@
       modalBody: $("modal-body"),
       authArea: $("auth-area")
     };
+    loadConfig();
     loadWeatherCache();
     bindEvents();
     renderAuth();
     initAuth()
       .then(function () { renderAuth(); return refreshAll(false); })
       .catch(function () { renderAuth(); return refreshAll(false); });
-    setInterval(function () { refreshAll(false); }, AUTO_REFRESH_MS);
+    setInterval(function () { refreshAll(false); }, autoRefreshMs);
     setInterval(renderStatus, 1000);
   }
 
