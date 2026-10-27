@@ -110,8 +110,13 @@ def apply_open_meteo_hosts(config):
     first = hosts[0]
     netloc = first if (":" in first) else (
         "[%s]" % first if ":" in first else first)
-    FORECAST_URL = urllib.parse.urlunparse(
-        parsed._replace(netloc=netloc))
+    cand = parsed._replace(netloc=netloc)
+    # https к «голому» IP не работает (сертификат выдан на имя, не на адрес),
+    # поэтому запросы к IP-адресам идут по http — как в probe и _candidate_urls.
+    if cand.scheme == "https" and \
+            re.fullmatch(r"\d+(\.\d+){3}", first.split(":")[0]):
+        cand = cand._replace(scheme="http")
+    FORECAST_URL = urllib.parse.urlunparse(cand)
     print("upstream: Open-Meteo forecast через fallback-хосты: %s"
           % ", ".join(hosts), flush=True)
 
@@ -1010,7 +1015,14 @@ class WeatherService:
             if host in seen:
                 continue
             seen.add(host)
-            out.append(urllib.parse.urlunparse(parsed._replace(netloc=host)))
+            cand = parsed._replace(netloc=host)
+            # https к «голому» IP не работает: сертификат Open-Meteo выдан
+            # на имя, а не на адрес (IP mismatch → CERTIFICATE_VERIFY_FAILED).
+            # Поэтому запросы к IP-адресам идут по http — как и в probe.
+            if cand.scheme == "https" and \
+                    re.fullmatch(r"\d+(\.\d+){3}", host.split(":")[0]):
+                cand = cand._replace(scheme="http")
+            out.append(urllib.parse.urlunparse(cand))
         return out
 
     def _upstream_headers(self, url, extra=None):

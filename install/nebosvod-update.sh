@@ -12,6 +12,8 @@
 #  Optional environment variables:
 #    NEBO_CTID        — pin the container ID explicitly (skips the prompt)
 #    NEBO_GIT_URL     — git source URL (default: https://github.com/AmoFess/nebosvod.git)
+#    NEBO_GIT_TOKEN   — access token for a PRIVATE git server (Forgejo/Gitea):
+#                       adds credentials to the fetch URL for the git update path
 #    NEBO_BRANCH      — branch name for the manual/tarball fallback (default: main)
 #    NEBO_TARBALL_URL — direct tarball URL override for the manual fallback
 #
@@ -197,14 +199,38 @@ update_via_git() {
     return 1
   fi
 
-  msg_info "Updating code via git fast-forward (git fetch + git merge --ff-only) ..."
+  msg_info "Updating code via git fast-forward (git fetch + merge --ff-only) ..."
+
+  # Для приватного сервера: временно добавляем токен к fetch-URL (env),
+  # origin в контейнере не меняется — токен не оседает в конфиге git.
+  local fetch_env=""
+  if [ -n "${NEBO_GIT_TOKEN:-}" ]; then
+    local origin_url
+    origin_url=$(pct exec "$CTID" -- sh -c "cd $APP_DIR && git remote get-url origin" 2>/dev/null || true)
+    if [ -n "$origin_url" ]; then
+      local proto rest host path user
+      proto="${origin_url%%://*}"
+      rest="${origin_url#*://}"
+      host="${rest%%/*}"
+      path="${rest#*/}"
+      user="${host%%@*}"
+      if [ "$user" != "$host" ]; then host="${host#*@}"; else user="oauth2"; fi
+      fetch_env="NEBO_FETCH_URL=${proto}://${user}:${NEBO_GIT_TOKEN}@${host}/${path}"
+    fi
+  fi
 
   local inline='
 set -e
 cd '"$APP_DIR"'
 echo "  Working dir: '"$APP_DIR"'"
-echo "  git fetch origin"
-git fetch origin
+if [ -n "${NEBO_FETCH_URL:-}" ]; then
+  echo "  git fetch (private source)"
+  git fetch "$NEBO_FETCH_URL" main
+  git update-ref refs/remotes/origin/main FETCH_HEAD
+else
+  echo "  git fetch origin"
+  git fetch origin
+fi
 branch=$(git rev-parse --abbrev-ref HEAD)
 [ -n "$branch" ] || branch=main
 echo "  On branch: ${branch}"
@@ -213,7 +239,7 @@ git merge --ff-only "origin/$branch"
 echo "  Updated to: $(git rev-parse --short HEAD)"
 '
 
-  if pct exec "$CTID" -- sh -c "$inline"; then
+  if pct exec "$CTID" -- env $fetch_env sh -c "$inline"; then
     UPDATE_METHOD="git fast-forward pull (fetch + merge --ff-only)"
     msg_ok "Fast-forward update succeeded."
     return 0
@@ -226,13 +252,19 @@ set -e
 cd '"$APP_DIR"'
 echo "  git stash push"
 git stash push -m "nebosvod-update autostash"
+if [ -n "${NEBO_FETCH_URL:-}" ]; then
+  git fetch "$NEBO_FETCH_URL" main
+  git update-ref refs/remotes/origin/main FETCH_HEAD
+else
+  git fetch origin
+fi
 branch=$(git rev-parse --abbrev-ref HEAD)
 [ -n "$branch" ] || branch=main
 echo "  git merge --ff-only origin/${branch}"
 git merge --ff-only "origin/$branch"
 '
   local merge_ok=0
-  if pct exec "$CTID" -- sh -c "$inline2"; then
+  if pct exec "$CTID" -- env $fetch_env sh -c "$inline2"; then
     merge_ok=1
   fi
 

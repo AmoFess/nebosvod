@@ -14,6 +14,9 @@
 #                   rootdir-capable storage preferring local*/tank*, else local-lvm)
 #    NEBO_GIT_URL — git source URL for the Nebosvod repo (default: GitHub;
 #                   use http://192.168.0.100/Amofess/nebosvod.git for local Forgejo)
+#    NEBO_GIT_TOKEN — access token for a PRIVATE git server ( Forgejo/Gitea).
+#                   With it, the script clones from NEBO_GIT_URL (or Forgejo by default)
+#                   as https://<token>@host/... — актуальная версия гарантирована.
 # =============================================================================
 
 set -Eeuo pipefail
@@ -197,10 +200,34 @@ install_app() {
   msg_info "Installing python3 and git inside the container ..."
   pct exec "${CTID}" -- apk add --no-cache python3 git || die "apk add failed."
 
-  msg_info "Cloning Nebosvod into /opt/nebosvod ..."
+  # Источник кода:
+  #  1. NEBO_GIT_URL (при необходимости с NEBO_GIT_TOKEN) — явное указание.
+  #  2. Иначе GitHub (публичное зеркало; может отставать от основной версии).
+  # Публичное зеркало GitHub обновляется с задержкой — если нужна гарантия
+  # актуальности, задайте NEBO_GIT_URL + NEBO_GIT_TOKEN приватного сервера.
   local repo_url="${NEBO_GIT_URL:-https://github.com/AmoFess/nebosvod.git}"
-  pct exec "${CTID}" -- env GIT_TERMINAL_PROMPT=0 git clone "$repo_url" /opt/nebosvod \
+  local clone_url="$repo_url"
+  if [ -n "${NEBO_GIT_TOKEN:-}" ]; then
+    # Вставляем токен как пароль (для Forgejo/Gitea логин произвольный,
+    # например имя пользователя из URL или "token").
+    local host path proto user
+    proto="${repo_url%%://*}"
+    rest="${repo_url#*://}"
+    host="${rest%%/*}"
+    path="${rest#*/}"
+    user="${host%%@*}"
+    if [ "$user" != "$host" ]; then host="${host#*@}"; else user="oauth2"; fi
+    clone_url="${proto}://${user}:${NEBO_GIT_TOKEN}@${host}/${path}"
+  fi
+  msg_info "Cloning Nebosvod into /opt/nebosvod ..."
+  msg_info "Source: ${repo_url}$( [ -n "${NEBO_GIT_TOKEN:-}" ] && echo ' (с токеном)' )"
+  pct exec "${CTID}" -- env GIT_TERMINAL_PROMPT=0 git clone "$clone_url" /opt/nebosvod \
     || die "git clone failed (check network access inside the container)."
+  # Токен не должен остаться в конфиге git клона:
+  if [ -n "${NEBO_GIT_TOKEN:-}" ]; then
+    pct exec "${CTID}" -- sh -c 'cd /opt/nebosvod && git remote set-url origin "'$repo_url'"' \
+      || msg_warn "Не удалось убрать токен из origin — удалите вручную: git remote set-url origin <url>"
+  fi
 
   msg_info "Creating config.json from config.json.example ..."
   pct exec "${CTID}" -- cp /opt/nebosvod/config.json.example /opt/nebosvod/config.json \
