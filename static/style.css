@@ -697,7 +697,10 @@ main {
 .card-condition { color: var(--accent); font-size: 19px; margin-top: 4px; text-align: right; }
 
 .card-rows {
-  margin-top: 14px;
+  /* Прижимается к низу карточки (вместе с card-sun ниже неё):
+     свободное место остаётся между статусом погоды и деталями. */
+  margin-top: auto;
+  padding-top: 14px;
   display: grid;
   gap: 6px;
   color: var(--text);
@@ -713,9 +716,8 @@ main {
 .card-rows .label { color: var(--dim); }
 
 .card-sun {
-  /* Прижат к низу карточки: margin-top: auto съедает свободное место.
-     Черта (border-top) едет вместе с блоком — над восходом/закатом. */
-  margin-top: auto;
+  /* Едет сразу под деталями (card-rows), которые прижаты к низу.
+     Черта (border-top) — над восходом/закатом. */
   padding-top: 12px;
   border-top: 1px solid var(--border-dim);
   display: flex;
