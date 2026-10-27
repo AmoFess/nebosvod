@@ -82,6 +82,20 @@
     return String(v) + (suffix || "");
   }
 
+  /* Температура: округление до целого, знак «+» для положительных и нуля.
+     Для диапазонов «макс / мин» — оба значения со знаками. */
+  function fmtTemp(v, suffix) {
+    if (v == null || v === "") return "—";
+    var n = Math.round(parseFloat(v));
+    if (isNaN(n)) return "—";
+    var s = n > 0 ? "+" : "";
+    return s + n + (suffix || "");
+  }
+
+  function fmtTempRange(v1, v2, suffix) {
+    return fmtTemp(v1, suffix) + " / " + fmtTemp(v2, suffix);
+  }
+
   function fmtClock(ts) {
     if (!ts) return "—";
     var d = new Date(ts);
@@ -352,11 +366,11 @@
         '<div class="card-name">' + esc(city.name) + '</div>' +
         '<div class="card-main">' +
           '<span class="card-emoji">' + emoji + '</span>' +
-          '<span class="card-temp">' + fmtVal(c.temperature, "°") + '</span>' +
+          '<span class="card-temp">' + fmtTemp(c.temperature, "°") + '</span>' +
         '</div>' +
         '<div class="card-condition">' + esc(c.condition || "") + '</div>' +
         '<div class="card-rows">' +
-          row("Ощущается", fmtVal(c.feels_like, "°")) +
+          row("Ощущается", fmtTemp(c.feels_like, "°")) +
           row("Влажность", fmtVal(c.humidity, "%")) +
           row("Ветер", (c.wind_direction || "") + " " + fmtVal(c.wind_speed, " м/с")) +
           row("Давление", fmtVal(c.pressure_mmhg, " мм рт. ст.")) +
@@ -404,8 +418,8 @@
 
       '<div class="section">' +
         '<h3>Сейчас</h3>' +
-        detail("Температура", fmtVal(c.temperature, "°")) +
-        detail("Ощущается", fmtVal(c.feels_like, "°")) +
+        detail("Температура", fmtTemp(c.temperature, "°")) +
+        detail("Ощущается", fmtTemp(c.feels_like, "°")) +
         detail("Влажность", fmtVal(c.humidity, "%")) +
         detail("Давление", fmtVal(c.pressure_mmhg, " мм рт. ст.")) +
         detail("Ветер", (c.wind_direction || "") + " " + fmtVal(c.wind_speed, " м/с")) +
@@ -416,7 +430,7 @@
 
       '<div class="section">' +
         '<h3>Сегодня</h3>' +
-        detail("Макс. / мин.", fmtVal(d.temp_max, "°") + " / " + fmtVal(d.temp_min, "°")) +
+        detail("Макс. / мин.", fmtTempRange(d.temp_max, d.temp_min, "°")) +
         detail("Осадки", fmtVal(d.precipitation_sum, " мм")) +
         detail("Вероятность осадков", fmtVal(d.precipitation_probability, "%")) +
         detail("Восход / закат", esc(d.sunrise || "—") + " / " + esc(d.sunset || "—")) +
@@ -426,7 +440,7 @@
 
       '<div class="section">' +
         '<h3>Ночь</h3>' +
-        detail("Мин. / макс.", fmtVal(n.temperature_min, "°") + " / " + fmtVal(n.temperature_max, "°")) +
+        detail("Мин. / макс.", fmtTempRange(n.temperature_min, n.temperature_max, "°")) +
         detail("Давление", fmtVal(n.pressure_mmhg, " мм рт. ст.")) +
         detail("Осадки", fmtVal(n.precipitation_sum, " мм")) +
         detail("Вероятность осадков", fmtVal(n.precipitation_probability, "%")) +

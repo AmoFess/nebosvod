@@ -645,9 +645,13 @@ def round1(value):
 
 
 def round_int(value):
+    """Математическое округление до целого (0.5 → 1, -0.5 → -1, как в JS Math.round).
+    Стандартный round() в Python — банковский (0.5 → 0), что даёт
+    расхождение с клиентским округлением."""
     if value is None:
         return 0
-    return int(round(float(value)))
+    f = float(value)
+    return int(f + 0.5) if f >= 0 else -int(-f + 0.5)
 
 
 def hhmm(value):
