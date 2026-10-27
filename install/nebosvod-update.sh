@@ -203,11 +203,14 @@ update_via_git() {
 
   # Для приватного сервера: временно добавляем токен к fetch-URL (env),
   # origin в контейнере не меняется — токен не оседает в конфиге git.
+  # Если origin уже содержит креды (user:token@host) — не трогаем.
   local fetch_env=""
   if [ -n "${NEBO_GIT_TOKEN:-}" ]; then
     local origin_url
     origin_url=$(pct exec "$CTID" -- sh -c "cd $APP_DIR && git remote get-url origin" 2>/dev/null || true)
-    if [ -n "$origin_url" ]; then
+    if [ -n "$origin_url" ] && [ "${origin_url#*@}" != "$origin_url" ]; then
+      msg_info "origin уже содержит учётные данные — токен не нужен"
+    elif [ -n "$origin_url" ]; then
       local proto rest host path user
       proto="${origin_url%%://*}"
       rest="${origin_url#*://}"
@@ -250,6 +253,11 @@ echo "  Updated to: $(git rev-parse --short HEAD)"
   local inline2='
 set -e
 cd '"$APP_DIR"'
+# Если предыдущий прерванный merge/stash оставил конфликт — разруливаем:
+if git diff --name-only --diff-filter=U | grep -q .; then
+  echo "  обнаружен незавершённый merge — сбрасываем конфликты к HEAD"
+  git merge --abort 2>/dev/null || git checkout -f HEAD -- .
+fi
 echo "  git stash push"
 git stash push -m "nebosvod-update autostash"
 if [ -n "${NEBO_FETCH_URL:-}" ]; then
