@@ -4,6 +4,7 @@
 
   var AUTO_REFRESH_MS_FALLBACK = 30 * 60 * 1000; // если сервер не отдал настройку
   var autoRefreshMs = AUTO_REFRESH_MS_FALLBACK; // уточняется из /api/config
+  var lastFetchedAt = null;  // unix s — когда сервер получил погоду (из ответа API)
 
   var cities = [];           // [{id,name,alias,latitude,longitude,timezone}]
   var weatherByCity = {};    // city_id -> weather data
@@ -123,6 +124,9 @@
       if (typeof obj.lastUpdatedAt === "number") {
         lastUpdatedAt = obj.lastUpdatedAt;
       }
+      if (typeof obj.lastFetchedAt === "number") {
+        lastFetchedAt = obj.lastFetchedAt;
+      }
       var entries = obj.cities;
       if (!entries || typeof entries !== "object") return;
       var now = Date.now();
@@ -164,6 +168,7 @@
       }
       localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify({
         lastUpdatedAt: lastUpdatedAt,
+        lastFetchedAt: lastFetchedAt,
         cities: entries
       }));
     } catch (e) {
@@ -232,10 +237,15 @@
       setStatus("");
       return;
     }
-    var remaining = autoRefreshMs - (Date.now() - lastUpdatedAt);
+    // Отсчёт «следующего обновления» — от момента, когда СЕРВЕР получил
+    // погоду (fetched_at из ответа), а не от момента ответа клиенту:
+    // иначе F5 сбрасывал бы таймер, хотя данные те же.
+    var base = lastFetchedAt != null ? lastFetchedAt : lastUpdatedAt;
+    var remaining = autoRefreshMs - (Date.now() - base);
     var tail = remaining <= 0 ? "обновление…" : fmtCountdown(remaining);
+    var updatedClock = fmtClock(lastFetchedAt != null ? lastFetchedAt : lastUpdatedAt);
     setStatusDonate(
-      "Обновлено: " + fmtClock(lastUpdatedAt) + " · следующее обновление " + tail,
+      "Обновлено: " + updatedClock + " · следующее обновление " + tail,
       "ok"
     );
   }
@@ -551,6 +561,12 @@
         }
       }
       if (okCount > 0) lastUpdatedAt = Date.now();
+      // Серверное время получения погоды: таймер футера считает от него,
+      // чтобы F5 не сбрасывал отсчёт (см. renderStatus).
+      if (typeof data.fetched_at === "number") {
+        lastFetchedAt = data.fetched_at * 1000;
+        saveWeatherCache();
+      }
       if (failCount > 0) {
         if (okCount === 0) {
           setStatus("Источник погоды недоступен — данные не получены", "error");

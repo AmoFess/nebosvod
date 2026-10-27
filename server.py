@@ -915,7 +915,7 @@ class WeatherService:
         done = 0
         for chunk in self._make_chunks(ids):
             try:
-                res = self.get_weather_batch(chunk, refresh=True)
+                res, _ = self.get_weather_batch(chunk, refresh=True)
                 done += len(res)
             except Exception as e:  # noqa: BLE001 - прогрев не роняет сервис
                 print("warmup: %s" % e, flush=True)
@@ -1285,7 +1285,19 @@ class WeatherService:
                         entry = self.cache.get(city_id)
                     if entry:
                         result[city_id] = self._stale_copy(entry)
-        return result
+
+        # Момент самой свежей из отанных данных (fetched_at из кэша).
+        # Фронтенд использует его для таймера «следующее обновление»:
+        # отсчёт от реального времени получения погоды сервером, а не от
+        # момента ответа — тогда F5 не сбрасывает таймер.
+        fetched_max = None
+        with self.cache_lock:
+            for city_id in result:
+                entry = self.cache.get(city_id)
+                if entry:
+                    if fetched_max is None or entry["fetched_at"] > fetched_max:
+                        fetched_max = entry["fetched_at"]
+        return result, fetched_max
 
     def build_weather(self, city, om):
         current = om.get("current") or {}
@@ -2131,12 +2143,18 @@ class Handler(BaseHTTPRequestHandler):
                 seen.add(city_id)
                 ordered.append(city_id)
 
-        results = self.service.get_weather_batch(ordered, refresh=refresh)
+        results, fetched_max = self.service.get_weather_batch(ordered, refresh=refresh)
         missing = [cid for cid in ordered if cid not in results]
-        self.send_json(200, {
+        payload = {
             "results": {str(k): v for k, v in results.items()},
             "missing": missing,
-        })
+        }
+        if fetched_max is not None:
+            # Момент получения самой свежей из отанных данных (unix ts).
+            # Фронтенд считает «следующее обновление» от него, а не от
+            # момента ответа — F5 не сбрасывает таймер в футере.
+            payload["fetched_at"] = fetched_max
+        self.send_json(200, payload)
 
     def handle_geocode(self, qs):
         q = (qs.get("q") or [None])[0]
