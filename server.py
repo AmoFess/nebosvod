@@ -913,13 +913,26 @@ class WeatherService:
         apply_open_meteo_scheme(self.config)
         apply_open_meteo_hosts(self.config)
         # Максимальный размер чанка (городов в одном запросе к Open-Meteo).
-        # http-фронтенд не тянет большие батчи: граница примерно 35–38 городов,
-        # надёжный потолок — 30. Можно переопределить в конфиге.
+        # Стартовое значение — из конфига; дальше чанк адаптируется к каналу:
+        # при таймаутах уменьшается (см. _shrink_chunk), при устойчивых
+        # успехах — пробует вырасти (см. _maybe_grow_chunk). Рабочее значение
+        # пишется в конфиг — переживает рестарт.
         try:
             self.BATCH_CHUNK_MAX = max(1, int(self.config.get(
                 "open_meteo_http_batch_chunk", 30)))
         except (TypeError, ValueError):
             self.BATCH_CHUNK_MAX = 30
+        # Потолок, который нельзя превышать при росте (из конфига).
+        try:
+            self.BATCH_CHUNK_CEILING = max(1, int(self.config.get(
+                "open_meteo_batch_chunk_ceiling", 30)))
+        except (TypeError, ValueError):
+            self.BATCH_CHUNK_CEILING = 30
+        # Счётчик успешных батчей подряд (для обратного роста чанка).
+        self._success_streak = 0
+        # Пробуемый (бОльший) чанк: пока не подтверждён успехом. При таймауте
+        # на пробном чанке откатываемся к рабочему значению.
+        self._trial_chunk = None
         self._chunk_lock = threading.Lock()
         self._sticky_host = None         # последний успешный fallback-хост
         self._sticky_lock = threading.Lock()
@@ -1018,6 +1031,8 @@ class WeatherService:
         + ["climate-api", "forecast-api", "global-api", "eu-api"]
     )
     DISCOVERY_INTERVAL = 6 * 3600   # раз в 6 часов
+    # Обратный рост чанка: после стольких успешных батчей подряд — проба удвоения.
+    CHUNK_GROW_AFTER = 6
     DISCOVERY_FAIL_LIMIT = 3        # неудач подряд, прежде чем удалить адрес
 
     def _probe_forecast_host(self, host):
@@ -1338,6 +1353,13 @@ class WeatherService:
                 # 5xx and 429 (rate limit).
                 retryable = e.code >= 500 or e.code == 429
                 err = OpenMeteoError("Open-Meteo HTTP %s" % e.code)
+                # HTTPError — файл-подобный объект с телом ответа. Если его
+                # не закрыть, сокет остаётся в CLOSE_WAIT (утечка): при
+                # обрывах канала ТСПУ это копилось часами (10+ сокетов).
+                try:
+                    e.close()
+                except Exception:  # noqa: BLE001 - лучше потерять тело
+                    pass
             except urllib.error.URLError as e:
                 err = OpenMeteoError("Open-Meteo unreachable: %s" % e.reason)
             except json.JSONDecodeError:
@@ -1448,6 +1470,9 @@ class WeatherService:
         Крупные чанки делим вдвое (быстро спускаемся), мелкие (<=4) —
         на 1, чтобы не проскочить рабочий размер (например, 3 → 2,
         а не сразу 1 — лишние запросы ни к чему).
+
+        Новое значение сохраняется в конфиг (переживает рестарт).
+        Неудавшийся пробный рост откатывается.
         """
         with self._chunk_lock:
             old = self.BATCH_CHUNK_MAX
@@ -1455,10 +1480,83 @@ class WeatherService:
                 self.BATCH_CHUNK_MAX = max(1, old - 1)
             else:
                 self.BATCH_CHUNK_MAX = max(1, old // 2)
+            self._success_streak = 0
+            self._trial_chunk = None   # пробный рост отменяется
             if self.BATCH_CHUNK_MAX != old:
                 print("upstream: батч не прошёл, снижаю чанк %d → %d"
                       % (old, self.BATCH_CHUNK_MAX), flush=True)
+                self._persist_chunk_max()
             return self.BATCH_CHUNK_MAX
+
+    def _maybe_grow_chunk(self):
+        """Пробует увеличить потолок чанка после серии успешных батчей.
+
+        Канал может улучшиться (ТСПУ режет ответы не всегда одинаково),
+        а мелкий чанк — лишние HTTP-вызовы и длинный цикл обновления.
+        Поэтому каждые CHUNK_GROW_AFTER успешных батчей подряд потолок
+        удваивается (не выше BATCH_CHUNK_CEILING) и проверяется живым
+        запросом. Если пробный размер не проходит — откат к рабочему.
+        Пробный запрос лёгкий, но того же размера (N городов), что и
+        будущий батч — верно отражает пропускную способность канала.
+        """
+        with self._chunk_lock:
+            # Пробный рост уже идёт — ждём его исхода.
+            if self._trial_chunk is not None:
+                return
+            self._success_streak += 1
+            if self._success_streak < self.CHUNK_GROW_AFTER:
+                return
+            self._success_streak = 0
+            current = self.BATCH_CHUNK_MAX
+            if current >= self.BATCH_CHUNK_CEILING:
+                return   # выше потолка из конфига не растём
+            trial = min(current * 2, self.BATCH_CHUNK_CEILING)
+            if trial <= current:
+                return
+            self._trial_chunk = trial
+        # Вне лока: живая проба нового размера.
+        ok = self._probe_chunk_size(trial)
+        with self._chunk_lock:
+            if ok:
+                self.BATCH_CHUNK_MAX = trial
+                print("upstream: канал улучшился, повышаю чанк %d → %d"
+                      % (current, trial), flush=True)
+                self._persist_chunk_max()
+            else:
+                print("upstream: пробный чанк %d не прошёл — остаёмся на %d"
+                      % (trial, current), flush=True)
+            self._trial_chunk = None
+
+    def _probe_chunk_size(self, size):
+        """Проверяет, пропустит ли канал батч из `size` городов.
+
+        Запрос с тем же набором данных, что боевой, но на 1 город —
+        ответ всё равно растёт с числом координат, так что проба
+        честно отражает пропускную способность.
+        """
+        locations = self.get_locations()
+        if not locations:
+            return False
+        probe_cities = []
+        for c in locations[:size]:
+            if c.get("latitude") is not None:
+                probe_cities.append(c)
+        if not probe_cities:
+            return False
+        try:
+            self.fetch_open_meteo_batch(probe_cities)
+            return True
+        except OpenMeteoError:
+            return False
+
+    def _persist_chunk_max(self):
+        """Сохраняет рабочий чанк в конфиг — переживает рестарт сервиса."""
+        try:
+            with self.config_lock:
+                self.config["open_meteo_http_batch_chunk"] = self.BATCH_CHUNK_MAX
+                self.save_config()
+        except Exception as e:  # noqa: BLE001 — не роняем обновление погоды
+            print("chunk: не удалось сохранить в конфиг (%s)" % e, flush=True)
 
     def _fetch_many(self, city_ids):
         """Синхронно тянет города из Open-Meteo пачками и кладёт в кэш.
@@ -1518,6 +1616,9 @@ class WeatherService:
                         "data": data,
                     }
                 updated[city_id] = data
+            # Батч прошёл: считаем серию успехов — при достаточно длинной
+            # пробуем поднять потолок чанка (канал мог улучшиться).
+            self._maybe_grow_chunk()
         if updated:
             self._save_cache()
         return updated
