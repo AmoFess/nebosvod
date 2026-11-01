@@ -1411,19 +1411,22 @@ class WeatherService:
     # self.BATCH_CHUNK_MAX из конфига; тут 60 — исторический потолок https).
     BATCH_CHUNK = 60
 
-    def _make_chunks(self, city_ids):
+    def _make_chunks(self, city_ids, chunk_max=None):
         """Делит города на чанки РАВНОМЕРНО (не «блоками по N»).
 
         Например, 70 городов при потолке 30: не 30+30+10, а три запроса
         по 24 (23/23/24). Все запросы получаются примерно одного размера,
         ни один не «виснет» на границе. Число запросов — минимально
         возможное: ceil(N / потолок).
+
+        chunk_max=None → берётся текущий адаптивный потолок (self.BATCH_CHUNK_MAX).
         """
         n = len(city_ids)
         if n == 0:
             return []
-        with self._chunk_lock:
-            chunk_max = max(1, int(self.BATCH_CHUNK_MAX))
+        if chunk_max is None:
+            with self._chunk_lock:
+                chunk_max = max(1, int(self.BATCH_CHUNK_MAX))
         n_chunks = max(1, -(-n // chunk_max))   # ceil-деление: минимум запросов
         base, rem = divmod(n, n_chunks)
         # Первые rem чанков на 1 город больше — разница размеров не больше 1.
@@ -1435,10 +1438,45 @@ class WeatherService:
             pos += size
         return out
 
+    def _shrink_chunk(self):
+        """Уменьшает адаптивный потолок чанка (минимум 1 город).
+
+        Вызывается при таймауте/сетеовой ошибке батча: провайдерский ДПИ
+        режет крупные HTTP-ответы (01.11.2026: граница сжалась с ~30 городов
+        до 2). Меньше городов в запросе — меньше ответ — проходит канал.
+
+        Крупные чанки делим вдвое (быстро спускаемся), мелкие (<=4) —
+        на 1, чтобы не проскочить рабочий размер (например, 3 → 2,
+        а не сразу 1 — лишние запросы ни к чему).
+        """
+        with self._chunk_lock:
+            old = self.BATCH_CHUNK_MAX
+            if old <= 4:
+                self.BATCH_CHUNK_MAX = max(1, old - 1)
+            else:
+                self.BATCH_CHUNK_MAX = max(1, old // 2)
+            if self.BATCH_CHUNK_MAX != old:
+                print("upstream: батч не прошёл, снижаю чанк %d → %d"
+                      % (old, self.BATCH_CHUNK_MAX), flush=True)
+            return self.BATCH_CHUNK_MAX
+
     def _fetch_many(self, city_ids):
-        """Синхронно тянет города из Open-Meteo пачками и кладёт в кэш."""
+        """Синхронно тянет города из Open-Meteo пачками и кладёт в кэш.
+
+        Адаптивный чанк: если батч упёрся в таймаут (канал режет крупные
+        ответы), потолок чанка уменьшается вдвое и города в текущем чанке
+        делятся заново — так находится рабочий размер без участия человека.
+        Уменьшение — одностороннее (в рамках жизни процесса): после
+        улучшения обстановки можно вернуть размер через restart, вручную
+        в конфиге или подождать (в будущем — обратный рост).
+        """
         updated = {}
-        for chunk in self._make_chunks(city_ids):
+        chunks = self._make_chunks(city_ids)
+        idx = 0
+        chunk_retries = {}   # индекс чанка -> число повторов при 429
+        while idx < len(chunks):
+            chunk = chunks[idx]
+            idx += 1
             pairs = []
             for city_id in chunk:
                 city = self.find_city(city_id=city_id)
@@ -1446,7 +1484,32 @@ class WeatherService:
                     pairs.append((city_id, city))
             if not pairs:
                 continue
-            om_list = self.fetch_open_meteo_batch([c for _, c in pairs])
+            try:
+                om_list = self.fetch_open_meteo_batch([c for _, c in pairs])
+            except OpenMeteoError as e:
+                # 429 (rate limit) — это не «канал режет большие ответы»:
+                # ужимать чанк бессмысленно, нужен просто повтор позже.
+                # Сетевые проблемы (timeout/unreachable) — признак того,
+                # что чанк слишком крупный: делим и пробуем меньшими.
+                is_rate_limit = "HTTP 429" in str(e)
+                if not is_rate_limit and len(chunk) > 1:
+                    self._shrink_chunk()
+                    # Оставшиеся города: этот чанк + все последующие.
+                    rest = [cid for c in chunks[idx - 1:] for cid in c]
+                    chunks = chunks[:idx - 1] + self._make_chunks(rest)
+                    # Пересборка вставила новые чанки с позиции idx-1:
+                    # возвращаемся, чтобы обработать их с начала.
+                    idx -= 1
+                    continue
+                if is_rate_limit and len(chunk) >= 1:
+                    # Пауза и повтор этого же чанка (до 3 раз на чанк).
+                    retries = chunk_retries.get(idx - 1, 0)
+                    if retries < 2:
+                        chunk_retries[idx - 1] = retries + 1
+                        time.sleep(5 * (retries + 1))
+                        idx -= 1   # повторить тот же чанк
+                        continue
+                raise   # один город и тот не прошёл — дальше по списку ошибок
             for (city_id, city), om in zip(pairs, om_list):
                 data = self.build_weather(city, om)
                 with self.cache_lock:
